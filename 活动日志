@@ -1,0 +1,28 @@
+# Payload Manipulation（载荷操纵）
+#基于任务类型动态分配话语权（双重权重路由），实现专业任务与情感支持的无缝切换
+& C:/Python313/python.exe g:/1groupOfReporAndHomework/aixodrasil_core/test.py
+
+=== Axiodrasil 核心流转测试启动 ===
+
+[Root 原始输入]: 我现在写代码写得头要炸了，痛感拉满，想砸电脑！                                           
+
+--- 开启节点流转监控 ---
+-> [系统] 正在解析输入意图...
+📍 [系统追踪] 数据到达节点 -> parser
+📍 [系统追踪] 数据到达节点 -> parser
+📍 [系统追踪] 数据到达节点 -> logic_agent
+   [Taki/Bit]: Logic initialized. 正在进行代码/代数推演。                                                 
+
+& C:/Python313/python.exe g:/1groupOfReporAndHomework/aixodrasil_core/test.py
+drasil_core/test.py                                  
+=== Axiodrasil 核心流转测试启动 ===
+
+[Root 原始输入]: 我今天在自习室熬了8个小时，虽然没有 生病，但是情绪已经见底了，真的好累，快夸夸我。       
+
+--- 开启节点流转监控 ---
+-> [系统] 正在解析输入意图...
+📍 [系统追踪] 数据到达节点 -> parser
+📍 [系统追踪] 数据到达节点 -> emotion_agent
+   [Bina]: 正在提供情绪价值与能量补给。
+
+=== 测试结束 ===

@@ -1,0 +1,10 @@
+axiodrasil_core/
+├── main.py                 # FastAPI 启动入口
+├── agents/                 # LangGraph 节点定义
+│   ├── router.py           # 双重权重路由逻辑
+│   ├── logic_audit.py      # Taki/Bit 的审计逻辑
+│   └── emotion_support.py  # Bina/Qianjin 的支持逻辑
+├── schemas/                
+│   └── protocols.py        # Pydantic 宪法级协议定义
+└── memory/
+    └── state_machine.py    # 状态机与熔断机制
