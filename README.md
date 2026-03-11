@@ -42,7 +42,7 @@ python test.py
 
 本系统的底层逻辑、Persona 设定机制与核心执行法案，已作为蓝图归档：
 
-* [Axiodrasil System BIOS (架构蓝图与协议设定)](https://www.google.com/search?q=docs/Axiodrasil_BIOS_V15.0.md)
+* [Axiodrasil System BIOS (架构蓝图与协议设定)](https://github.com/TraitYoung/Agentic-task-router/blob/main/docs/Axiodrasil_BIOS_V15.0.md)
 
 ## 🏗️ 路线图 (Roadmap)
 
