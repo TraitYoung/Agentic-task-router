@@ -1,6 +1,47 @@
-.env
+# Python 编译产物
 __pycache__/
-*.pyc
-.ipynb_checkpoints/
+*.py[cod]
+*.pyo
+*.pyd
+*.pkl
+
+# 虚拟环境
+.env/
+.venv/
+venv/
+ENV/
+env/
+
+# 项目配置与敏感信息
+*.env
+!.env.example
+
+# SQLite 数据库
+data/*.db
+*.sqlite
+*.sqlite3
+
+# 日志与运行输出
+logs/*.log
+*.log
+output.log
+
+# Cursor / VSCode / IDE
+.cursor/
 .vscode/
 .idea/
+
+# 测试缓存
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# 操作系统杂项
+.DS_Store
+Thumbs.db
+
+# 临时脚本或本地工具（如你不想公开）
+inspect_q2.py
+insert_career_nuke.py
+clear_Q1.py
