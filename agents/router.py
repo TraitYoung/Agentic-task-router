@@ -43,7 +43,7 @@ llm = ChatOpenAI(
     base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 )
 
-# 【核心魔法】：将 Pydantic 协议绑定到 LLM 上
+# 【核心功能】：将 Pydantic 协议绑定到 LLM 上
 # 这行代码意味着：无论 LLM 怎么胡说八道，它最终必须吐出一个完美的 TaskIntent 对象
 parser_llm = llm.with_structured_output(TaskIntent)
 
@@ -106,7 +106,7 @@ def node_parser(state: GraphState):
 
     return {"intent": real_intent}
 
-# 2. 定义节点 (Nodes) - 对应你的各个 Agent (先写假逻辑，证明路能通)
+# 2. 定义节点 (Nodes) - 对应各个 Agent (先写假逻辑，证明路能通)
 # def node_parser(state: GraphState):
 #     """模拟大模型解析意图（MVP阶段直接硬编码测试）"""
 #     print("-> [系统] 正在解析输入意图...")
