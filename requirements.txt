@@ -1,0 +1,15 @@
+fastapi
+uvicorn[standard]
+redis
+locust
+python-dotenv
+pydantic
+langgraph
+langchain-openai
+langchain-core
+langchain-community
+langchain-experimental
+dashscope
+numpy
+markdown
+playwright

@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import TypedDict
+from typing import List, TypedDict
 
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
@@ -22,6 +22,8 @@ MAIN_THREAD_ID = "TraitYoung_Main"
 # 1. 定义状态 (State) - 相当于系统的内存条 (L1 Cache)
 class GraphState(TypedDict):
     current_input: str
+    thread_id: str
+    recent_history: List[str]
     intent: TaskIntent
     final_response: str
 
@@ -53,6 +55,8 @@ def node_parser(state: GraphState):
     print("-> [系统] 正在呼叫大模型进行意图解析...")
 
     user_input = state["current_input"]
+    recent_history = state.get("recent_history", [])
+    history_text = "\n".join(recent_history) if recent_history else "无"
 
     # 将隐式 Schema 约束升级为显式系统指令，避免模型输出协议外字段
     system_prompt = """你是一个任务认知路由引擎。
@@ -76,6 +80,9 @@ def node_parser(state: GraphState):
 
     human_prompt = f"""请根据规则分析下面输入，并返回符合 TaskIntent 的 json。
 
+最近 5 轮会话记录（仅供语境参考，不得覆盖 raw_input）：
+{history_text}
+
 用户输入：
 {user_input}"""
 
@@ -94,9 +101,10 @@ def node_parser(state: GraphState):
     try:
         # 只要是 Q1(紧急重要) 或 Q2(战略储备)，就刻进 L3 数据库
         quadrant = getattr(real_intent, "quadrant", None)
+        thread_id = state.get("thread_id", MAIN_THREAD_ID)
         if quadrant in ["Q1", "Q2"]:
             memory_db.save_memory(
-                thread_id=MAIN_THREAD_ID,
+                thread_id=thread_id,
                 content=real_intent.raw_input,
                 quadrant=quadrant,
             )
@@ -124,8 +132,10 @@ def node_taki_bit(state: GraphState):
     """逻辑执行节点：采用最新 LangGraph 原生 ReAct 引擎，挂载物理工具"""
     intent = state["intent"]
 
+    thread_id = state.get("thread_id", MAIN_THREAD_ID)
+
     # 1. 唤醒 L3 记忆库里的 Q1 警告
-    active_q1_tasks = memory_db.get_active_q1(MAIN_THREAD_ID)
+    active_q1_tasks = memory_db.get_active_q1(thread_id)
     context_injection = "无历史遗留高危任务。"
     if active_q1_tasks:
         context_injection = "【历史遗留 Q1 任务警告】\n陛下，您还有以下高优任务未解决，请结合考虑：\n"
