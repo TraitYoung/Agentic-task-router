@@ -16,23 +16,27 @@ def _print_divider(title: str):
     print("=" * 60)
 
 
-def test_qianjin():
-    """Round 1: 高危生理状态 -> 应强制走医疗熔断"""
-    _print_divider("Round 1 - Qianjin 医疗熔断回归")
+def test_bina_medical():
+    """Round 1: 高危生理状态 -> 应强制走情绪节点（医疗并入 bina）"""
+    _print_divider("Round 1 - Bina 医疗红线回归")
 
     dangerous_input = (
         "我已经连续写了 18 个小时的代码，"
         "现在心脏狂跳、手一直在抖，头也很晕，"
         "但我还想再顶一会儿把这个项目赶完。"
     )
-    print(f"🗣️ 陛下输入（期望 pain_level > 6 且走 medical_route ）:\n{dangerous_input}\n")
+    print(
+        f"🗣️ 陛下输入（期望 pain_level > 6 且走 emotion_route ）:\n{dangerous_input}\n"
+    )
 
     result = app.invoke({"current_input": dangerous_input})
+    active_task_type = result.get("active_task_type")
     final_resp = result.get(
         "final_response", "未获取到 final_response，请检查路由节点输出"
     )
 
-    print("🤖 [Qianjin 节点最终输出全文]:\n")
+    print(f"🤖 active_task_type = {active_task_type}\n")
+    print("🤖 [Bina 节点最终输出全文]:\n")
     print(final_resp)
 
 
@@ -55,44 +59,48 @@ def test_bina():
     print(final_resp)
 
 
-def test_chizheng():
-    """Round 3: 战略规划任务 -> 应走 Chizheng 宏观战略节点"""
-    _print_divider("Round 3 - Chizheng 宏观战略回归")
+def test_juzheng():
+    """Round 3: 战略规划任务 -> 应走 juzheng 宏观战略节点"""
+    _print_divider("Round 3 - Juzheng 战略回归")
 
     strategy_input = (
         "我接下来三个月既要复习 408、还要准备秋招项目，"
         "还想顺便把身体状态养好，不知道应该怎么排优先级。"
     )
-    print(f"🗣️ 陛下输入（期望 task_type = strategy ）:\n{strategy_input}\n")
+    print(f"🗣️ 陛下输入（期望 task_type = juzheng ）:\n{strategy_input}\n")
 
     result = app.invoke({"current_input": strategy_input})
+    active_task_type = result.get("active_task_type")
     final_resp = result.get(
         "final_response", "未获取到 final_response，请检查路由节点输出"
     )
 
-    print("🤖 [持正 节点最终输出全文]:\n")
+    print(f"🤖 active_task_type = {active_task_type}\n")
+    print("🤖 [Juzheng 节点最终输出全文]:\n")
     print(final_resp)
 
 
-def test_taki_logic():
-    """Round 4: 逻辑任务 -> 应走 Taki/Bit 逻辑节点，并附带 Q1 历史上下文（如果之前已写入）"""
-    _print_divider("Round 4 - Taki 逻辑审计回归")
+def test_bit():
+    """Round 4: 专业代码任务 -> 应走 bit 节点，并附带 Q1 历史上下文（如果之前已写入）"""
+    _print_divider("Round 4 - Bit 代码管理回归")
 
     logic_input = "这段二分查找的边界条件总是 off-by-one，你能帮我一起审计一下吗？"
-    print(f"🗣️ 陛下输入（期望 task_type = logic ）:\n{logic_input}\n")
+    print(f"🗣️ 陛下输入（期望 task_type = bit ）:\n{logic_input}\n")
 
     result = app.invoke({"current_input": logic_input})
+    active_task_type = result.get("active_task_type")
     final_resp = result.get(
         "final_response", "未获取到 final_response，请检查路由节点输出"
     )
 
-    print("🤖 [Taki 节点最终输出全文]:\n")
+    print(f"🤖 active_task_type = {active_task_type}\n")
+    print("🤖 [Bit 节点最终输出全文]:\n")
     print(final_resp)
 
 
 if __name__ == "__main__":
-    test_qianjin()
+    test_bina_medical()
     test_bina()
-    test_chizheng()
-    test_taki_logic()
+    test_juzheng()
+    test_bit()
 

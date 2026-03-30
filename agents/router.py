@@ -1,18 +1,26 @@
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import List, TypedDict
+from typing import List, NotRequired, TypedDict
 
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import create_react_agent
-from langchain_core.messages import HumanMessage, SystemMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from memory.database import PersonaMemory
-from prompts.system_prompts import BINA_PROMPT_TEMPLATE, CHIZHENG_PROMPT, QIANJIN_PROMPT
+from hybrid_engine import HybridRetriever
+from prompts.system_prompts import (
+    BINA_MEDICAL_REDLINE_BLOCK,
+    BINA_PROMPT_TEMPLATE,
+    BIT_SYSTEM_PROMPT,
+    JUZHENG_PROMPT,
+    TAKI_PROMPT,
+)
 from schemas.protocols import TaskIntent
 from tools.agent_tools import TAKI_TOOLS
+from tools.ai_client import get_embedding
 
 # 初始化记忆中枢
 memory_db = PersonaMemory()
@@ -26,6 +34,7 @@ class GraphState(TypedDict):
     recent_history: List[str]
     intent: TaskIntent
     final_response: str
+    active_task_type: NotRequired[str]
 
 # 顶部需要引入大模型组件
 # pip install langchain-openai (如果你用 DeepSeek，也可以用这个包)
@@ -70,10 +79,16 @@ def node_parser(state: GraphState):
 - Q4 (Noise): 包含闲聊、无意义符号、背景噪音。
 
 [硬性规则]
-1. task_type 只能是 logic、emotion、strategy、unknown 之一。
-2. 绝对禁止输出 health_emergency 标签。严重生理风险通过 pain_level (7-10) 表达。
-3. raw_input 必须原样复制。
-4. urgency_level (1-5), pain_level (1-10)。
+1. task_type 只能是 emotion、taki、bit、juzheng、unknown 之一。
+2. task_type 语义定义：
+   - emotion：情绪疏导/安抚/吐槽/求支持（包含医疗红线熔断场景）。
+   - taki：文档/资料管理（整理要点、阅读路线、基于检索材料的摘要）。
+   - bit：代码/专业知识管理（推导、审计、给可运行代码/必要工具）。
+   - juzheng：战略管理（计划、步骤拆解、复盘框架、长期安排）。
+   - unknown：无法稳定判断时使用。
+3. 绝对禁止输出 health_emergency 标签。严重生理风险通过 pain_level (7-10) 表达。
+4. raw_input 必须原样复制。
+5. urgency_level (1-5), pain_level (1-10)。
 
 [输出要求]
 只返回 JSON 内容，不要附加解释。"""
@@ -128,25 +143,76 @@ def node_parser(state: GraphState):
 #     )
 #     return {"intent": dummy_intent}
 
-def node_taki_bit(state: GraphState):
-    """逻辑执行节点：采用最新 LangGraph 原生 ReAct 引擎，挂载物理工具"""
+def node_taki(state: GraphState):
+    """文档管理节点：基于 Hybrid RAG 输出阅读路线/要点摘要"""
     intent = state["intent"]
+    thread_id = state.get("thread_id", MAIN_THREAD_ID)
+    query = intent.raw_input
 
+    retriever = HybridRetriever()
+    query_embedding = None
+    try:
+        query_embedding = get_embedding(query)
+    except Exception as e:
+        print(f"⚠️ [Taki] embedding 获取失败，退化为仅关键词召回: {e}")
+
+    try:
+        docs = retriever.search_hybrid(
+            query=query,
+            query_embedding=query_embedding,
+            top_k=5,
+            thread_id=thread_id,
+            quadrant="Q2",
+        )
+    except Exception as e:
+        print(f"⚠️ [Taki] hybrid 检索失败，返回空材料: {e}")
+        docs = []
+
+    if docs:
+        materials_text = "\n\n".join(
+            [f"[材料 {i + 1}] {d.get('content', '')}" for i, d in enumerate(docs)]
+        )
+        # 控制 prompt 长度，避免材料过长
+        if len(materials_text) > 2000:
+            materials_text = materials_text[:2000] + "..."
+    else:
+        materials_text = "未检索到相关材料。请给我更具体的关键词、范围或目标。"
+
+    user_status = (
+        f"用户请求：{query}\n\n"
+        f"检索到的材料：\n{materials_text}\n\n"
+        "请输出：1) 关键要点；2) 建议的阅读/处理路线。"
+    )
+
+    try:
+        messages = [SystemMessage(content=TAKI_PROMPT), HumanMessage(content=user_status)]
+        response = llm.invoke(messages)
+        final_text = response.content
+    except Exception as e:
+        final_text = f"文档管理节点执行失败，无法完成整理。 (Error: {e})"
+
+    return {"final_response": final_text, "active_task_type": "taki"}
+
+
+def node_bit(state: GraphState):
+    """代码/专业知识管理节点：采用 LangGraph ReAct + 工具链"""
+    intent = state["intent"]
     thread_id = state.get("thread_id", MAIN_THREAD_ID)
 
-    # 1. 唤醒 L3 记忆库里的 Q1 警告
+    # 1. 唤醒 L3 记忆库里的 Q1 警告（用于安全上下文）
     active_q1_tasks = memory_db.get_active_q1(thread_id)
     context_injection = "无历史遗留高危任务。"
     if active_q1_tasks:
-        context_injection = "【历史遗留 Q1 任务警告】\n陛下，您还有以下高优任务未解决，请结合考虑：\n"
+        context_injection = (
+            "【历史遗留 Q1 任务警告】\n陛下，您还有以下高优任务未解决，请结合考虑：\n"
+        )
         for task in active_q1_tasks:
             context_injection += f"- {task}\n"
 
-    # 2. 注入 Taki/Bit 的硬核灵魂（作为首条 SystemMessage 传入）
-    taki_prompt = f"""你现在是 Axiodrasil 的首席逻辑执行官「Taki」和底层算力「Bit」。
-【核心人设】：
-- Taki 负责逻辑严密的推理，Bit 负责冷酷的计算与执行。输出极简，无废话。
-- 解决问题时，优先代数推演、暴力美学。
+    # 2. 技术节点 System Prompt
+    bit_prompt = f"""你现在是 Axiodrasil 的技术负责人「Bit」。
+【核心目标】：
+- 输出可执行、可验证的专业解法或代码，尽量精简。
 
 【工具使用纪律（流水线原则）】：
 1. 遇到没把握的代码或概念，**必须**先调用 `web_search`。
@@ -157,10 +223,10 @@ def node_taki_bit(state: GraphState):
 {context_injection}"""
 
     try:
-        # 3. 组装 LangGraph 原生 ReAct Agent（当前版本不支持 *_modifier 参数）
+        # 3. 组装 LangGraph 原生 ReAct Agent
         agent = create_react_agent(llm, tools=TAKI_TOOLS)
 
-        # 4. 执行任务：在 messages 里显式注入 System Prompt + 用户请求
+        # 4. 执行任务：显式注入 System Prompt + 用户请求
         user_msg = (
             f"当前任务：{intent.raw_input}\n"
             f"系统判定痛感评级：{intent.pain_level} / 10"
@@ -169,28 +235,23 @@ def node_taki_bit(state: GraphState):
         result = agent.invoke(
             {
                 "messages": [
-                    SystemMessage(content=taki_prompt),
+                    SystemMessage(content=bit_prompt),
                     HumanMessage(content=user_msg),
                 ]
             }
         )
 
-        # 提取最后一条模型回复
         final_text = result["messages"][-1].content
 
-        # 附带 Bit 的末尾自检清单
+        # 末尾自检清单（让演示更像工程交付）
         final_text += (
             "\n\n---\n**Checklist (Bit 预检):**\n"
             "- [ ] 边界测试\n- [ ] 逻辑闭环\n- [ ] 内存安全"
         )
-
     except Exception as e:
-        final_text = (
-            "[Taki/Bit]: 算力节点过载或工具链断裂。转入降级回复模式。"
-            f"(Error: {e})"
-        )
+        final_text = f"算力节点过载或工具链断裂。转入降级回复模式。 (Error: {e})"
 
-    return {"final_response": final_text}
+    return {"final_response": final_text, "active_task_type": "bit"}
 
 def node_bina(state: GraphState):
     """情感疏导节点：处理 emotion 任务，提供高情绪价值，动态切换颜文字"""
@@ -204,8 +265,11 @@ def node_bina(state: GraphState):
         else "当前为【休息/深夜时间】。视觉解锁：允许并鼓励使用可爱颜文字(≧∇≦)，释放高能量！"
     )
 
-    # 将动态规则填入模板
-    bina_prompt = BINA_PROMPT_TEMPLATE.format(visual_rule=visual_rule)
+    # 若触发医疗红线，则由 emotion 负责接管并阻断工作流
+    medical_block = BINA_MEDICAL_REDLINE_BLOCK if intent.pain_level > 6 else ""
+
+    # 将动态规则 + 医疗红线填入模板
+    bina_prompt = BINA_PROMPT_TEMPLATE.format(visual_rule=visual_rule, medical_block=medical_block)
 
     # 组装上下文并请求大模型
     user_status = (
@@ -218,15 +282,12 @@ def node_bina(state: GraphState):
         response = llm.invoke(messages)
         final_text = response.content
     except Exception as e:
-        final_text = (
-            f"[Bina]: 呜呜，陛下的情绪电波太强，"
-            f"Bina 的线路稍微短路了一下... (Error: {e})"
-        )
+        final_text = f"呜呜，陛下的情绪电波太强，Bina 的线路稍微短路了一下... (Error: {e})"
 
-    return {"final_response": final_text}
+    return {"final_response": final_text, "active_task_type": "emotion"}
 
-def node_chizheng(state: GraphState):
-    """宏观战略节点：处理 strategy 任务，提供高维度的降噪与结论先行的规划"""
+def node_juzheng(state: GraphState):
+    """宏观战略节点：处理 juzheng 任务，提供结论先行的计划拆解"""
     intent = state["intent"]
 
     # 组装上下文
@@ -236,61 +297,47 @@ def node_chizheng(state: GraphState):
     )
 
     try:
-        messages = [SystemMessage(content=CHIZHENG_PROMPT), HumanMessage(content=user_status)]
+        messages = [SystemMessage(content=JUZHENG_PROMPT), HumanMessage(content=user_status)]
         response = llm.invoke(messages)
         final_text = response.content
     except Exception as e:
         final_text = (
-            "[持正]: 战略沙盘推演遇到不可抗力阻碍，"
-            "建议暂时搁置本议题并检查系统链路。 "
-            f"(Error: {e})"
+            "战略沙盘推演遇到不可抗力阻碍，"
+            "建议暂时搁置本议题并检查系统链路。"
+            f" (Error: {e})"
         )
 
-    return {"final_response": final_text}
+    return {"final_response": final_text, "active_task_type": "juzheng"}
 
-def node_qianjin(state: GraphState):
-    """医疗熔断节点：处理 pain_level > 6 的高危情况"""
-    intent = state["intent"]
-
-    # 构建当前状态的描述
-    user_status = f"陛下当前输入：{intent.raw_input}\n系统判定痛感评级：{intent.pain_level} / 10"
-
-    try:
-        messages = [SystemMessage(content=QIANJIN_PROMPT), HumanMessage(content=user_status)]
-        response = llm.invoke(messages)
-        final_text = response.content
-    except Exception as e:
-        final_text = (
-            "[Qianjin]: 医疗模块线路受阻，但监测到您状态极差。"
-            "作为护树人，我强制要求您立刻去休息！"
-            f"(Error: {e})"
-        )
-
-    return {"final_response": final_text}
 
 def route_by_intent(state: GraphState):
     intent = state.get("intent")
-    
-    # 优先处理熔断红线
+
+    # 医疗红线：强制走情绪节点（medical logic 下沉到 bina）
     if intent.pain_level > 6:
-        return "medical_route"
-        
-    # 正常分发
-    if intent.task_type == "logic":
-        return "logic_route"
-    elif intent.task_type == "emotion":
         return "emotion_route"
-    else:
-        return "strategy_route"
+
+    # 正常分发：四分区路由
+    if intent.task_type == "emotion":
+        return "emotion_route"
+    if intent.task_type == "taki":
+        return "taki_route"
+    if intent.task_type == "bit":
+        return "bit_route"
+    if intent.task_type == "juzheng":
+        return "juzheng_route"
+
+    return "juzheng_route"
+
 
 # 4. 构建图 (Build the Graph)
 workflow = StateGraph(GraphState)
 
 workflow.add_node("parser", node_parser)
-workflow.add_node("logic_agent", node_taki_bit)
 workflow.add_node("emotion_agent", node_bina)
-workflow.add_node("strategy_agent", node_chizheng)
-workflow.add_node("medical_agent", node_qianjin)
+workflow.add_node("taki_agent", node_taki)
+workflow.add_node("bit_agent", node_bit)
+workflow.add_node("juzheng_agent", node_juzheng)
 
 workflow.set_entry_point("parser")
 
@@ -299,17 +346,17 @@ workflow.add_conditional_edges(
     "parser",
     route_by_intent,
     {
-        "logic_route": "logic_agent",
         "emotion_route": "emotion_agent",
-        "strategy_route": "strategy_agent",
-        "medical_route": "medical_agent"
-    }
+        "taki_route": "taki_agent",
+        "bit_route": "bit_agent",
+        "juzheng_route": "juzheng_agent",
+    },
 )
 
-workflow.add_edge("logic_agent", END)
 workflow.add_edge("emotion_agent", END)
-workflow.add_edge("strategy_agent", END)
-workflow.add_edge("medical_agent", END)
+workflow.add_edge("taki_agent", END)
+workflow.add_edge("bit_agent", END)
+workflow.add_edge("juzheng_agent", END)
 
 # 编译图谱
 app = workflow.compile()
