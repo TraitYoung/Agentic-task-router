@@ -2,6 +2,9 @@ from uuid import uuid4
 import re
 import asyncio
 import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import List
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import StreamingResponse
@@ -17,13 +20,30 @@ session_cache = SessionCache(ttl_seconds=3600, window_size=5)
 
 
 class ChatRequest(BaseModel):
-    text: str = Field(..., min_length=1, max_length=1000, description="用户原始输入")
+    text: str = Field(..., min_length=1, max_length=12000, description="用户原始输入")
 
 
 class ChatResponse(BaseModel):
     session_id: str
     reply: str
     intent: TaskIntent
+
+
+class ChatExportItem(BaseModel):
+    user: str
+    assistant: str
+    ts: str
+
+
+class ChatExportResponse(BaseModel):
+    session_id: str
+    turns: List[ChatExportItem]
+    file_path: str
+
+
+class ChatHistoryResponse(BaseModel):
+    session_id: str
+    turns: List[ChatExportItem]
 
 
 @app.post("/api/v1/chat", response_model=ChatResponse)
@@ -157,3 +177,76 @@ async def chat_stream_api(payload: ChatRequest, x_session_id: str | None = Heade
         yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(event_gen(), media_type="text/event-stream")
+
+
+@app.post("/api/v1/chat/export", response_model=ChatExportResponse)
+async def chat_export_api(x_session_id: str | None = Header(default=None), limit: int = 20):
+    """
+    导出当前 session 的最近对话轮次到 output/chats/*.jsonl。
+
+    - 文件命名：YYYYMMDD_HHMMSS_首句prompt截断.jsonl
+    - 内容：每行一个 {user, assistant, ts}
+    """
+    if not x_session_id:
+        raise HTTPException(status_code=400, detail="missing x-session-id header")
+
+    turns = session_cache.get_recent_turns(session_id=x_session_id, limit=limit)
+    if not turns:
+        raise HTTPException(status_code=404, detail="no turns found for this session")
+
+    project_root = Path(__file__).resolve().parent
+    export_dir = project_root / "output" / "chats"
+    export_dir.mkdir(parents=True, exist_ok=True)
+
+    first_user = ""
+    for t in turns:
+        if t.get("user"):
+            first_user = t["user"]
+            break
+    title = (first_user.splitlines()[0] if first_user else "session").strip()
+    if len(title) > 30:
+        title = title[:30]
+    safe_title = "".join(ch for ch in title if ch not in '\\/:*?"<>|' and ord(ch) >= 32) or "session"
+
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    filename = f"{ts}_{safe_title}.jsonl"
+    file_path = export_dir / filename
+
+    items: List[ChatExportItem] = []
+    with file_path.open("w", encoding="utf-8") as f:
+        for t in turns:
+            item = ChatExportItem(
+                user=t.get("user", ""),
+                assistant=t.get("assistant", ""),
+                ts=t.get("ts", ""),
+            )
+            items.append(item)
+            f.write(item.model_dump_json(ensure_ascii=False) + "\n")
+
+    rel_path = str(file_path.relative_to(project_root))
+    return ChatExportResponse(session_id=x_session_id, turns=items, file_path=rel_path)
+
+
+@app.get("/api/v1/chat/history", response_model=ChatHistoryResponse)
+async def chat_history_api(x_session_id: str | None = Header(default=None), limit: int = 50):
+    """
+    获取当前 session 的最近对话轮次（用于前端展示聊天记录）。
+    """
+    if not x_session_id:
+        raise HTTPException(status_code=400, detail="missing x-session-id header")
+
+    turns_raw = session_cache.get_recent_turns(session_id=x_session_id, limit=limit)
+    if not turns_raw:
+        return ChatHistoryResponse(session_id=x_session_id, turns=[])
+
+    items: List[ChatExportItem] = []
+    for t in turns_raw:
+        items.append(
+            ChatExportItem(
+                user=t.get("user", ""),
+                assistant=t.get("assistant", ""),
+                ts=t.get("ts", ""),
+            )
+        )
+
+    return ChatHistoryResponse(session_id=x_session_id, turns=items)

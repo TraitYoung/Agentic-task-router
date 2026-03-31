@@ -1,0 +1,43 @@
+{
+  "timestamp": "2026-03-31T08:12:07Z",
+  "input_dir": "G:\\1groupOfReporAndHomework\\aixodrasil_core\\logs",
+  "output_file": "G:\\1groupOfReporAndHomework\\aixodrasil_core\\output\\SFT_training_data.jsonl",
+  "archive_dir": "G:\\1groupOfReporAndHomework\\aixodrasil_core\\output\\archive",
+  "dry_run": false,
+  "system_instruction": "你是一个高可靠的数据清洗助手。请基于输入日志片段输出准确、简洁、可复用的工程知识表达。",
+  "source_files": [
+    "memory_system_evolution.log",
+    "parser_and_prompt_evolution.log",
+    "rag.log",
+    "taki_tools_debug.log"
+  ],
+  "records_total": 10,
+  "file_stats": [
+    {
+      "file": "memory_system_evolution.log",
+      "chunks": 2,
+      "kept": 2
+    },
+    {
+      "file": "parser_and_prompt_evolution.log",
+      "chunks": 2,
+      "kept": 2
+    },
+    {
+      "file": "rag.log",
+      "chunks": 4,
+      "kept": 4
+    },
+    {
+      "file": "taki_tools_debug.log",
+      "chunks": 2,
+      "kept": 2
+    }
+  ],
+  "archived_files": [
+    "G:\\1groupOfReporAndHomework\\aixodrasil_core\\output\\archive\\20260331_161207\\memory_system_evolution.log",
+    "G:\\1groupOfReporAndHomework\\aixodrasil_core\\output\\archive\\20260331_161207\\parser_and_prompt_evolution.log",
+    "G:\\1groupOfReporAndHomework\\aixodrasil_core\\output\\archive\\20260331_161207\\rag.log",
+    "G:\\1groupOfReporAndHomework\\aixodrasil_core\\output\\archive\\20260331_161207\\taki_tools_debug.log"
+  ]
+}

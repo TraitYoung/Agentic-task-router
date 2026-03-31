@@ -1,20 +1,21 @@
-## Axiodrasil: 多 Agent 路由与记忆内核
+## Axiodrasil: 数字助理团（多 Agent 路由与记忆内核）
 
 [![Python 3.13](https://img.shields.io/badge/Python-3.13-blue.svg)](https://www.python.org/)
 [![LangGraph](https://img.shields.io/badge/Orchestration-LangGraph-orange.svg)](https://github.com/langchain-ai/langgraph)
 [![Pydantic](https://img.shields.io/badge/Protocol-Pydantic_V2-red.svg)](https://docs.pydantic.dev/)
 
-Axiodrasil 是一个基于 LangGraph + 千问 (Qwen) 的多智能体任务路由与记忆内核，用于应对高压任务环境：
+Axiodrasil 是一个面向高压学习/项目场景的 **数字助理团** 系统。  
+它基于 LangGraph + 千问 (Qwen)，把不同类型问题分发给不同助理，并配套记忆与检索能力：
 
-- **路由层**：将自然语言输入解析为结构化 `TaskIntent`，路由到「情绪官 Bina」「文档管理 taki」「技术/代码 bit」「战略官 juzheng」四条轨道；当 `pain_level > 6` 时触发医疗熔断逻辑，但已并入情绪节点。
-- **记忆层**：将重要/战略级别（Q1/Q2）的对话片段写入 SQLite「L3 记忆矩阵」，并建立 FTS5 全文索引与向量表。
-- **检索层（Hybrid RAG）**：对 Q2 战略记忆使用 FTS5 + 向量召回 + RRF 融合，实现工业级「长期规划回忆」。
+- **路由层**：把输入解析为结构化 `TaskIntent`，分发到「情绪助理 Bina」「文档助理 Taki」「技术助理 Bit」「战略助理 Juzheng」；当 `pain_level > 6` 时优先进入情绪节点做熔断。
+- **记忆层**：将重要/战略对话（Q1/Q2）写入 SQLite「L3 记忆矩阵」，并维护 FTS5 全文索引与向量表。
+- **检索层（Hybrid RAG）**：对 Q2 记忆使用 FTS5 + 向量召回 + RRF 融合，支持长期规划类问题回忆。
 
-本项目可直接运行，适合作为简历中的「多 Agent 工作流 + 记忆/RAG」综合工程示例。
+本项目可直接运行，适合作为简历中的「数字助理团 + 多 Agent 工作流 + 记忆/RAG」综合工程示例。
 
 ---
 
-## 第一章：系统整体概念
+## 第一章：系统整体概念（数字助理团）
 
 - **目标场景**：高压、自我管理场景（刷题、备考、项目冲刺），需要同时处理：
   - 严肃的逻辑任务（代码审计、算法推导等）
@@ -79,12 +80,24 @@ User Input
 ├─ data/
 │  └─ axiodrasil_core.db     # SQLite 记忆库（由于隐私原因，默认不提交）
 ├─ hybrid_engine.py          # HybridRetriever：FTS5 + 向量召回 + RRF 融合
-├─ migration.py              # Q2 冷启动向量化脚本
-├─ test_rag.py               # RAG 压测脚本（主命中+候选）
-├─ inspect_q2.py             # Q2 内容查看（本地调试工具）
-├─ insert_career_nuke.py     # 插入 Career_Nuke 样本（demo 专用）
-├─ test.py                   # 路由引擎总体流转测试
-├─ even_sum.py               # Taki 工具链生成的示例脚本
+├─ scripts/
+│  ├─ migration.py           # Q2 冷启动向量化脚本
+│  ├─ inspect_q2.py          # Q2 内容查看（本地调试工具）
+│  ├─ insert_career_nuke.py  # 插入 Career_Nuke 样本（demo 专用）
+│  ├─ clear_Q1.py            # 清理指定线程记忆
+│  ├─ md_to_pdf.py           # 文档转 PDF
+│  ├─ locustfile.py          # Locust 压测入口
+│  ├─ dev_ports.ps1          # Windows 端口清理+重启函数
+│  ├─ run_all_checks.ps1     # Windows 一站式启动/测试菜单
+│  └─ dev_stack.ps1          # Windows 三服务一键启停（可选停单项）
+├─ test_suite/
+│  ├─ test.py                # 路由引擎总体流转测试
+│  ├─ test_memory.py         # 记忆矩阵回归测试
+│  ├─ test_rag.py            # RAG 压测脚本（主命中+候选）
+│  └─ test_system_prompts.py # Prompt 节点回归测试
+├─ output/
+│  ├─ even_sum.py            # 工具链生成示例脚本（归档）
+│  └─ primes_upto_100.py     # 工具链生成示例脚本（归档）
 ├─ .gitignore
 └─ README.md
 ```
@@ -100,7 +113,7 @@ User Input
 - **日志文件**
   - `logs/*.log`：包含调试轨迹与可能的敏感上下文，仅用于本地观测与问题排查。
 - **本地调试脚本（可选）**
-  - 如 `inspect_q2.py`、`insert_career_nuke.py`、`clear_Q1.py` 等，用于本地注入样本、查看记忆矩阵、清理测试数据。
+  - 如 `scripts/inspect_q2.py`、`scripts/insert_career_nuke.py`、`scripts/clear_Q1.py` 等，用于本地注入样本、查看记忆矩阵、清理测试数据。
     如果你克隆仓库后发现它们不存在，可以按 README 中的说明自行创建。
 
 这些忽略规则与 `.gitignore` 中的配置一一对应，保证系统结构完整，同时不泄露任何个人敏感信息。
@@ -167,7 +180,7 @@ User Input
 - 每次请求前读取最近 5 轮对话并注入到 `GraphState.recent_history`，用于意图解析语境；
 - 每次回复后写回 Redis，并刷新 TTL（默认 1 小时）；SQLite 仍保留为冷数据持久化。
 
-### 5.2 冷启动向量化（migration.py）
+### 5.2 冷启动向量化（scripts/migration.py）
 
 - 找到所有 `quadrant='Q2'` 且尚未写入 `memory_embeddings` 的记录；
 - 调用 `tools.ai_client.get_embedding(content)` 得到 1536 维向量；
@@ -224,33 +237,33 @@ REDIS_URL=redis://localhost:6379/0
 1. 初始化 / 迁移数据库（含 Q2 向量化）：
 
    ```bash
-   python migration.py
+   python scripts/migration.py
    ```
 
 2. 压测 Hybrid RAG 行为：
 
    ```bash
-   python test_rag.py
+   python test_suite/test_rag.py
    ```
 
 3. 查看 Q2 记忆矩阵当前内容：
 
    ```bash
-   python inspect_q2.py
+   python scripts/inspect_q2.py
    ```
 
 4. 示例：插入一条 Career_Nuke 规划样本并验证检索：
 
    ```bash
-   python insert_career_nuke.py
-   python migration.py
-   python test_rag.py
+   python scripts/insert_career_nuke.py
+   python scripts/migration.py
+   python test_suite/test_rag.py
    ```
 
 5. 测试路由引擎整体流转：
 
    ```bash
-   python test.py
+   python test_suite/test.py
    ```
 
 6. 启动 FastAPI（服务接口）并进行流式调用测试：
@@ -260,6 +273,92 @@ REDIS_URL=redis://localhost:6379/0
 7. 启动 Next.js 演示页（展示路由分区）：
 
    - 访问：`frontend/` 目录并运行 `npm run dev`
+
+8. 运行日志清洗飞轮（input -> SFT jsonl -> archive）：
+
+   ```bash
+   # 默认读取 ./input/*.log，输出到 ./output/SFT_training_data.jsonl
+   python tools/logs_to_sft.py
+   ```
+
+   ```bash
+   # 自定义输入输出目录 + 自定义 system instruction
+   python tools/logs_to_sft.py --input-dir logs --output-dir output --system-instruction "你是一个高可靠训练数据清洗器。"
+   ```
+
+   ```bash
+   # 从文件注入 system instruction（优先级高于 --system-instruction）
+   python tools/logs_to_sft.py --system-instruction-file prompts/bit_sft_system.txt
+   ```
+
+   - 产物说明：
+     - `output/SFT_training_data.jsonl`：清洗后的训练样本（JSONL，一行一条记录，可直接用于 SFT）。
+     - `output/sft_manifest.json`：本次跑批的执行清单（输入目录、样本条数、源日志文件、归档路径等元数据）。
+     - `output/archive/<时间戳>/*.log`：本次已处理的原始日志备份，用于避免重复清洗与后续追溯。
+
+9. Windows 开发启动（端口清理 + 确认提示）：
+
+   ```powershell
+   # 在仓库根目录加载函数
+   . .\scripts\dev_ports.ps1
+   ```
+
+   ```powershell
+   # Redis（6379）
+   Restart-RedisDev
+   # 后端（8000）
+   Restart-BackendDev
+   # 前端（3000）
+   Restart-FrontendDev
+   ```
+
+   也可用通用函数：
+
+   ```powershell
+   Restart-PortServiceWithConfirm -Port 6379 -StartCommand "redis-server --port 6379"
+   ```
+
+10. Windows 一站式菜单（启动 + 测试收口）：
+
+   ```powershell
+   # 在仓库根目录执行
+   powershell -ExecutionPolicy Bypass -File .\scripts\run_all_checks.ps1
+   ```
+
+   菜单内可直接完成：重启 Redis/后端/前端、运行迁移、运行测试、dry-run 清洗流程。
+
+11. Windows 三服务一键启停（Redis + Backend + Frontend）：
+
+   ```powershell
+   # 一键全启
+   powershell -ExecutionPolicy Bypass -File .\scripts\dev_stack.ps1 -Action start -All -ForceKillPort
+
+   # 一键全启并自动打开前端页面
+   powershell -ExecutionPolicy Bypass -File .\scripts\dev_stack.ps1 -Action start -All -ForceKillPort -OpenBrowser
+
+   # 查看状态
+   powershell -ExecutionPolicy Bypass -File .\scripts\dev_stack.ps1 -Action status -All
+
+   # 选择性关闭（示例：只关前端）
+   powershell -ExecutionPolicy Bypass -File .\scripts\dev_stack.ps1 -Action stop -Service frontend
+
+   # 一键全关
+   powershell -ExecutionPolicy Bypass -File .\scripts\dev_stack.ps1 -Action stop -All
+   ```
+
+12. 前端交互界面（聊天 / 清洗模式 + 对话导航）：
+
+   - 界面地址：`http://127.0.0.1:3000`
+   - 功能特性：
+     - 左侧为主交互区：支持「聊天模式」与「清洗模式」切换，清洗模式下可：
+       - 从默认 `input/` 目录下拉选择日志文件，或上传本地文件；
+       - 注入自定义 `system instruction`（手写或文件）；
+       - 触发 Bit 自动执行「日志清洗 -> SFT_training_data.jsonl -> archive」流水线。
+     - 下方展示对话记录：用户在右侧气泡、模型在左侧气泡，最近记录可滚动查看。
+     - 右侧为会话导航栏：
+       - 显示当前对话轮数（最多 50 轮），超过上限需新建会话；
+       - 列出最近 prompt，点击可平滑滚动定位到对应轮次；
+       - 提供「新建对话」「重置 session」「导出会话」等操作，导出的会话存放于 `output/chats/*.jsonl`。
 
 ---
 

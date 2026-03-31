@@ -43,6 +43,6 @@ htmlcov/
 Thumbs.db
 
 # 临时脚本或本地工具（如你不想公开）
-inspect_q2.py
-insert_career_nuke.py
-clear_Q1.py
+scripts/inspect_q2.py
+scripts/insert_career_nuke.py
+scripts/clear_Q1.py

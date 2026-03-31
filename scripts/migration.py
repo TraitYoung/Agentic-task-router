@@ -1,12 +1,18 @@
 import sqlite3
+import sys
+from pathlib import Path
 
 import numpy as np
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from memory.database import PersonaMemory
 from tools.ai_client import get_embedding
 
 
-def cold_start_q2_migration(db_path: str = "./data/axiodrasil_core.db") -> None:
+def cold_start_q2_migration(db_path: str | None = None) -> None:
     """
     冷启动：将 Q2 象限历史记忆全部向量化，写入 memory_embeddings。
 
@@ -16,6 +22,8 @@ def cold_start_q2_migration(db_path: str = "./data/axiodrasil_core.db") -> None:
     3. 写入 memory_embeddings(memory_id, embedding)
     """
     print("开始 Q2 记忆语义化迁移...")
+    if db_path is None:
+        db_path = str(PROJECT_ROOT / "data" / "axiodrasil_core.db")
 
     # 确保目标数据库已经按最新 schema 初始化（含 memory_embeddings / memory_fts 等）
     # 这行会在指定 db_path 上跑一次 _init_db()，但不会破坏已有数据。

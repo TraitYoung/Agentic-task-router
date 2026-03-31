@@ -103,4 +103,3 @@ if __name__ == "__main__":
     test_bina()
     test_juzheng()
     test_bit()
-

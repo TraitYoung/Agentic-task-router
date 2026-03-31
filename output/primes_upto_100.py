@@ -12,6 +12,7 @@ def is_prime(n):
             return False
     return True
 
+
 # 生成1-100的所有质数
 primes = []
 for n in range(1, 101):

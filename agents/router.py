@@ -19,7 +19,7 @@ from prompts.system_prompts import (
     TAKI_PROMPT,
 )
 from schemas.protocols import TaskIntent
-from tools.agent_tools import TAKI_TOOLS
+from tools.agent_tools import TAKI_TOOLS, execute_python
 from tools.ai_client import get_embedding
 
 # 初始化记忆中枢
@@ -198,6 +198,41 @@ def node_bit(state: GraphState):
     """代码/专业知识管理节点：采用 LangGraph ReAct + 工具链"""
     intent = state["intent"]
     thread_id = state.get("thread_id", MAIN_THREAD_ID)
+    raw_input_lower = intent.raw_input.lower()
+
+    # 意图优先执行：命中日志清洗/SFT飞轮关键词时，先触发本地流水线脚本
+    sft_intent_keywords = [
+        "sft",
+        "训练数据",
+        "jsonl",
+        "日志清洗",
+        "log",
+        "logs",
+        "归档",
+        "archive",
+        "system instruction",
+    ]
+    if any(k in raw_input_lower for k in sft_intent_keywords):
+        pipeline_code = (
+            "import subprocess\n"
+            "cmd = ['python', 'tools/logs_to_sft.py', '--input-dir', 'logs', '--output-dir', 'output']\n"
+            "res = subprocess.run(cmd, capture_output=True, text=True)\n"
+            "print('exit_code=', res.returncode)\n"
+            "print('stdout:\\n' + (res.stdout or ''))\n"
+            "print('stderr:\\n' + (res.stderr or ''))\n"
+        )
+        try:
+            run_result = execute_python.invoke({"code": pipeline_code})
+            final_text = (
+                "已命中“日志清洗 -> SFT -> 归档”用户意图，已优先执行自动流水线：\n\n"
+                f"{run_result}\n\n"
+                "如需自定义路径或 system instruction，请继续给我参数：\n"
+                "- --input-dir / --output-dir / --archive-dir\n"
+                "- --system-instruction 或 --system-instruction-file"
+            )
+        except Exception as e:
+            final_text = f"命中优先执行意图，但流水线执行失败。 (Error: {e})"
+        return {"final_response": final_text, "active_task_type": "bit"}
 
     # 1. 唤醒 L3 记忆库里的 Q1 警告（用于安全上下文）
     active_q1_tasks = memory_db.get_active_q1(thread_id)
@@ -312,10 +347,25 @@ def node_juzheng(state: GraphState):
 
 def route_by_intent(state: GraphState):
     intent = state.get("intent")
+    current_input = str(state.get("current_input", "")).lower()
 
     # 医疗红线：强制走情绪节点（medical logic 下沉到 bina）
     if intent.pain_level > 6:
         return "emotion_route"
+
+    # 清洗流水线优先：命中数据清洗/归档关键词时强制走 bit
+    cleaning_keywords = [
+        "json",
+        "jsonl",
+        "清洗",
+        "归档",
+        "sft",
+        "logs",
+        "log",
+        "system instruction",
+    ]
+    if any(k in current_input for k in cleaning_keywords):
+        return "bit_route"
 
     # 正常分发：四分区路由
     if intent.task_type == "emotion":
