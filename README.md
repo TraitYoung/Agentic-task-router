@@ -148,14 +148,14 @@ User Input
 
 ### 四个 Agent 简述
 
-- `emotion_agent`（bina）：
+- `emotion_agent`（情绪 / bina）：
   - 负责情绪支持；当 `pain_level > 6` 时注入医疗红线内容，强制阻断工作流并给出身体动作建议。
-- `taki_agent`：
+- `taki_agent`（文档 / taki）：
   - 文档管理节点：基于 `hybrid_engine.HybridRetriever` 对 Q2 材料做 Hybrid 检索，输出关键要点 + 阅读/处理路线。
-- `bit_agent`：
+- `bit_agent`（技术 / bit）：
   - 代码/专业知识管理节点：采用 `create_react_agent(llm, tools=TAKI_TOOLS)` 进行工具链调用（联网/沙盒执行/写文件受控授权等）。
   - 会从 SQLite 的 Q1 未完成任务读取上下文，注入到 Bit 的执行 prompt。
-- `juzheng_agent`：
+- `juzheng_agent`（战略 / juzheng）：
   - 战略管理节点：提供计划拆解、步骤安排与复盘框架（结论先行、可落地）。
 
 ---
