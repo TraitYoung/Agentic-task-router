@@ -64,18 +64,55 @@ export default function Home() {
   const [manualSystemInstruction, setManualSystemInstruction] = useState<string>("");
   const [systemFileName, setSystemFileName] = useState<string>("");
   const [systemFileContent, setSystemFileContent] = useState<string>("");
+  const [stackOk, setStackOk] = useState<boolean | null>(null);
+  const [stackHint, setStackHint] = useState<string>("");
 
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    const cached = window.localStorage.getItem("x-session-id");
-    if (cached) {
-      setSessionId(cached);
-      return;
+    try {
+      const cached = window.localStorage.getItem("x-session-id");
+      if (cached) {
+        setSessionId(cached);
+        return;
+      }
+      const id = crypto.randomUUID();
+      window.localStorage.setItem("x-session-id", id);
+      setSessionId(id);
+    } catch {
+      setSessionId(crypto.randomUUID());
     }
-    const id = crypto.randomUUID();
-    window.localStorage.setItem("x-session-id", id);
-    setSessionId(id);
+  }, []);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch("/api/health", { cache: "no-store" });
+        const data = (await res.json().catch(() => ({}))) as {
+          ok?: boolean;
+          detail?: string;
+          backend?: string;
+          backendHealth?: { redis?: boolean };
+        };
+        if (res.ok && data.ok) {
+          setStackOk(true);
+          if (data.backendHealth && data.backendHealth.redis === false) {
+            setStackHint("Redis 未连通：历史/导出可能异常，请检查 6379 或停掉系统 Redis 后重开 dev_stack。");
+          } else {
+            setStackHint("");
+          }
+        } else {
+          setStackOk(false);
+          setStackHint(
+            data.detail ||
+              `Next 无法访问后端 ${data.backend || "127.0.0.1:8000"}，请确认 uvicorn 已在本机 8000 监听。`
+          );
+        }
+      } catch (e) {
+        setStackOk(false);
+        setStackHint(e instanceof Error ? e.message : "健康检查失败");
+      }
+    })();
   }, []);
 
   useEffect(() => {
@@ -88,13 +125,21 @@ export default function Home() {
             "x-session-id": sessionId,
           },
         });
-        if (!res.ok) return;
+        if (!res.ok) {
+          const data = (await res.json().catch(() => ({}))) as { detail?: string };
+          setError(
+            data.detail ||
+              `加载历史失败 (HTTP ${res.status})。若页面卡住过久，多半是 Redis 阻塞或后端未启动。`
+          );
+          return;
+        }
+        setError("");
         const data = (await res.json()) as { turns?: ChatTurn[] };
         const turns = data.turns || [];
         setHistory(turns);
         setActiveTurnIdx(turns.length > 0 ? turns.length - 1 : -1);
       } catch {
-        // ignore
+        setError("加载历史时网络错误，请确认前端 dev 与后端均已启动。");
       }
     })();
   }, [sessionId]);
@@ -217,8 +262,16 @@ export default function Home() {
         signal: controller.signal,
       });
 
-      if (!res.ok || !res.body) {
+      if (!res.ok) {
+        const ct = res.headers.get("content-type") || "";
+        if (ct.includes("application/json")) {
+          const j = (await res.json().catch(() => null)) as { detail?: string } | null;
+          throw new Error(j?.detail || `HTTP ${res.status}`);
+        }
         throw new Error(`HTTP ${res.status}`);
+      }
+      if (!res.body) {
+        throw new Error("响应无正文（后端可能未返回流）");
       }
 
       const reader = res.body.getReader();
@@ -331,10 +384,15 @@ export default function Home() {
             </div>
             <div className="flex gap-2">
               <button
-                className="px-3 py-2 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-sm"
+                type="button"
+                className="px-3 py-2 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                 onClick={() => {
                   const id = crypto.randomUUID();
-                  window.localStorage.setItem("x-session-id", id);
+                  try {
+                    window.localStorage.setItem("x-session-id", id);
+                  } catch {
+                    /* 隐私模式等无法写 localStorage 时仍允许新会话 */
+                  }
                   setSessionId(id);
                   setText("");
                   setReply("");
@@ -347,7 +405,8 @@ export default function Home() {
                 新建对话
               </button>
               <button
-                className="px-3 py-2 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-sm"
+                type="button"
+                className="px-3 py-2 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                 onClick={onExport}
                 disabled={exporting || !sessionId}
               >
@@ -362,9 +421,32 @@ export default function Home() {
             </div>
           ) : null}
 
+          {stackOk === false ? (
+            <div className="mb-3 rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/40 px-3 py-2 text-sm text-red-800 dark:text-red-200">
+              <div className="font-medium">后端链路异常（Next → FastAPI）</div>
+              <div className="mt-1 text-xs opacity-90">{stackHint}</div>
+              <div className="mt-2 text-xs text-red-700 dark:text-red-300">
+                建议：以管理员打开 CMD/PowerShell，对仍占用 6379 的进程执行{" "}
+                <code className="rounded bg-red-100 dark:bg-red-900/50 px-1">taskkill /F /PID {"<PID>"}</code>，或在{" "}
+                <code className="rounded bg-red-100 dark:bg-red-900/50 px-1">services.msc</code>{" "}
+                中停止 Redis 服务；然后{" "}
+                <code className="rounded bg-red-100 dark:bg-red-900/50 px-1">
+                  .\scripts\dev_stack.ps1 -Action restart -All -ForceKillPort
+                </code>
+                。修改过后端 Python 后需重启 backend。
+              </div>
+            </div>
+          ) : null}
+          {stackOk === true && stackHint ? (
+            <div className="mb-3 rounded-lg border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/40 px-3 py-2 text-xs text-amber-900 dark:text-amber-200">
+              {stackHint}
+            </div>
+          ) : null}
+
           <div className="mb-3 flex gap-2">
             <button
-              className={`px-3 py-1.5 rounded-lg text-sm border ${
+              type="button"
+              className={`px-3 py-1.5 rounded-lg text-sm border disabled:opacity-50 disabled:cursor-not-allowed ${
                 mode === "chat"
                   ? "bg-black text-white border-black dark:bg-white dark:text-black dark:border-white"
                   : "bg-transparent border-zinc-300 dark:border-zinc-700"
@@ -375,7 +457,8 @@ export default function Home() {
               聊天模式
             </button>
             <button
-              className={`px-3 py-1.5 rounded-lg text-sm border ${
+              type="button"
+              className={`px-3 py-1.5 rounded-lg text-sm border disabled:opacity-50 disabled:cursor-not-allowed ${
                 mode === "clean"
                   ? "bg-black text-white border-black dark:bg-white dark:text-black dark:border-white"
                   : "bg-transparent border-zinc-300 dark:border-zinc-700"
@@ -401,14 +484,28 @@ export default function Home() {
             />
             {!loading ? (
               <button
-                className="px-4 py-2 rounded-lg bg-black dark:bg-white text-white dark:text-black text-sm"
+                type="button"
+                className="px-4 py-2 rounded-lg bg-black dark:bg-white text-white dark:text-black text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                 onClick={onSend}
                 disabled={disableSend}
+                title={
+                  !sessionId
+                    ? "正在初始化会话…"
+                    : history.length >= TURN_LIMIT
+                      ? "已达轮次上限，请新建对话"
+                      : mode === "chat" && !text.trim()
+                        ? "请先输入内容"
+                        : undefined
+                }
               >
                 发送
               </button>
             ) : (
-              <button className="px-4 py-2 rounded-lg bg-red-600 text-white text-sm" onClick={onStop}>
+              <button
+                type="button"
+                className="px-4 py-2 rounded-lg bg-red-600 text-white text-sm"
+                onClick={onStop}
+              >
                 停止
               </button>
             )}
@@ -428,7 +525,8 @@ export default function Home() {
                     disabled={loading}
                   />
                   <button
-                    className="px-2 py-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-xs"
+                    type="button"
+                    className="px-2 py-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-xs disabled:opacity-50 disabled:cursor-not-allowed"
                     onClick={() => void loadDefaultFiles(inputDir)}
                     disabled={loading}
                   >
@@ -561,9 +659,14 @@ export default function Home() {
           <div className="text-sm font-medium mb-1">会话导航</div>
           <div className="text-xs text-zinc-500 mb-3">轮次：{history.length} / {TURN_LIMIT}</div>
           <button
+            type="button"
             className="w-full mb-3 px-3 py-2 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-sm"
             onClick={() => {
-              window.localStorage.removeItem("x-session-id");
+              try {
+                window.localStorage.removeItem("x-session-id");
+              } catch {
+                /* ignore */
+              }
               window.location.reload();
             }}
           >

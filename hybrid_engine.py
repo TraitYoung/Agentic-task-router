@@ -3,6 +3,8 @@ from typing import List, Tuple, Optional, Dict, Any
 
 import numpy as np
 
+from tools.rerank_client import maybe_rerank
+
 
 class HybridRetriever:
     """
@@ -163,13 +165,15 @@ class HybridRetriever:
         top_k: int = 5,
         thread_id: Optional[str] = None,
         quadrant: Optional[str] = None,
+        rerank_pool_size: int = 10,
     ) -> List[Dict[str, Any]]:
         """
         对外暴露的 Hybrid 检索接口。
 
         - 输入：自然语言 query + 已计算好的向量 query_embedding
-        - 内部：FTS5 + 向量检索，两路召回后用 RRF 融合
-        - 输出：按相关度排序的前 top_k 条 memory_matrix 记录
+        - 内部：FTS5 + 向量检索，两路召回后用 RRF 融合；取融合后前 rerank_pool_size 条，
+          若配置了 Rerank API 则再截断为 top_k，否则按 RRF 顺序取 top_k
+        - 输出：前 top_k 条 memory_matrix 记录
         """
         # 两路召回
         keyword_ids = self._get_keyword_scores(
@@ -191,7 +195,8 @@ class HybridRetriever:
         if not fused:
             return []
 
-        top_ids = [doc_id for doc_id, _ in fused[:top_k]]
+        pool = min(max(rerank_pool_size, top_k), len(fused))
+        top_ids = [doc_id for doc_id, _ in fused[:pool]]
         if not top_ids:
             return []
 
@@ -222,7 +227,7 @@ class HybridRetriever:
         # 为了与 RRF 排名保持一致，需要按 top_ids 的顺序重排
         id_to_item = {item["id"]: item for item in result}
         ordered = [id_to_item[i] for i in top_ids if i in id_to_item]
-        return ordered
+        return maybe_rerank(query, ordered, final_top_k=top_k)
 
 
 __all__ = ["HybridRetriever"]

@@ -164,13 +164,25 @@ def node_taki(state: GraphState):
             thread_id=thread_id,
             quadrant="Q2",
         )
+        # 当前会话尚无 Q2 时，再查全库 Q2（无需改 x-session-id 也能命中迁移/脚本写入的样本）
+        if not docs:
+            docs = retriever.search_hybrid(
+                query=query,
+                query_embedding=query_embedding,
+                top_k=5,
+                thread_id=None,
+                quadrant="Q2",
+            )
     except Exception as e:
         print(f"⚠️ [Taki] hybrid 检索失败，返回空材料: {e}")
         docs = []
 
     if docs:
         materials_text = "\n\n".join(
-            [f"[材料 {i + 1}] {d.get('content', '')}" for i, d in enumerate(docs)]
+            [
+                f"[文献 {i + 1}] (ID: mem_{d.get('id', '')}): {d.get('content', '')}"
+                for i, d in enumerate(docs)
+            ]
         )
         # 控制 prompt 长度，避免材料过长
         if len(materials_text) > 2000:

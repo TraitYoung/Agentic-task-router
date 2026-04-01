@@ -1,3 +1,11 @@
+import sys
+from pathlib import Path
+
+# 从仓库任意位置执行 `python test_suite\test_rag.py` 时，保证能 import 根目录包
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 from hybrid_engine import HybridRetriever
 from tools.ai_client import get_embedding
 
@@ -5,7 +13,7 @@ from tools.ai_client import get_embedding
 def final_sanity_check() -> None:
     retriever = HybridRetriever()
     query = "关于 Career_Nuke 的长线职业规划是什么？"
-    print(f"🔍 正在执行混合检索: {query}")
+    print(f"[RAG] 正在执行混合检索: {query}")
 
     # 计算查询向量（真实 text-embedding-3-small 向量）
     query_embedding = get_embedding(query)

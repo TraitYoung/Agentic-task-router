@@ -19,6 +19,18 @@ app = FastAPI(title="Axiodrasil Core API", version="1.0.0")
 session_cache = SessionCache(ttl_seconds=3600, window_size=5)
 
 
+@app.get("/api/v1/health")
+def api_health():
+    """轻量探活：供 Next 开发代理与运维脚本探测；不调用大模型。"""
+    redis_ok = False
+    try:
+        session_cache.client.ping()
+        redis_ok = True
+    except Exception:
+        pass
+    return {"ok": True, "redis": redis_ok}
+
+
 class ChatRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=12000, description="用户原始输入")
 

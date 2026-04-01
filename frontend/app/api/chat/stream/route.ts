@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { getBackendBaseUrl } from "@/lib/backend";
 
 export const runtime = "nodejs";
 
@@ -17,18 +18,28 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ detail: "missing field: text" }, { status: 400 });
   }
 
-  const backendUrl = "http://127.0.0.1:8000/api/v1/chat/stream";
+  const backendUrl = `${getBackendBaseUrl()}/api/v1/chat/stream`;
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
   if (sessionId) headers["x-session-id"] = sessionId;
 
-  const backendRes = await fetch(backendUrl, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ text: payload.text }),
-  });
+  let backendRes: Response;
+  try {
+    backendRes = await fetch(backendUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ text: payload.text }),
+      signal: AbortSignal.timeout(600_000),
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return NextResponse.json(
+      { detail: `无法连接 FastAPI（${backendUrl}）：${msg}` },
+      { status: 503 }
+    );
+  }
 
   if (!backendRes.ok || !backendRes.body) {
     const text = await backendRes.text().catch(() => "");

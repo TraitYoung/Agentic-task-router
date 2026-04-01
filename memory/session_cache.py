@@ -18,7 +18,13 @@ class SessionCache:
         self.redis_url = redis_url or os.getenv("REDIS_URL", "redis://localhost:6379/0")
         self.ttl_seconds = ttl_seconds
         self.window_size = window_size
-        self.client = redis.Redis.from_url(self.redis_url, decode_responses=True)
+        # 避免无 Redis / 半开连接时 LRANGE 等调用无限阻塞，拖死单 worker 的 FastAPI
+        self.client = redis.Redis.from_url(
+            self.redis_url,
+            decode_responses=True,
+            socket_connect_timeout=2.0,
+            socket_timeout=2.0,
+        )
 
     def _key(self, session_id: str) -> str:
         return f"session:{session_id}:chat_turns"

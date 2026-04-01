@@ -8,6 +8,9 @@ param(
     [switch]$OpenBrowser
 )
 
+# 菜单里选「启动全部 / 重启全部」时自动打开浏览器（命令行请用：-Action start -All -OpenBrowser）
+$script:OpenBrowserFromMenu = $false
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
@@ -82,11 +85,33 @@ function Get-PortPids([int]$Port) {
 function Stop-ByPort([int]$Port) {
     $pids = @(Get-PortPids -Port $Port)
     foreach ($portPid in $pids) {
+        $stillAlive = $true
         try {
             Stop-Process -Id $portPid -Force -ErrorAction Stop
             Write-Host "Stopped PID=$portPid on port $Port"
+            $stillAlive = $false
         } catch {
-            Write-Warning "Failed to stop PID=$portPid on port ${Port}: $($_.Exception.Message)"
+            Write-Warning "Stop-Process 失败 PID=$portPid 端口=${Port}: $($_.Exception.Message)"
+        }
+        if ($stillAlive -and (Get-Process -Id $portPid -ErrorAction SilentlyContinue)) {
+            try {
+                $p = Start-Process -FilePath "taskkill.exe" -ArgumentList @("/F", "/PID", "$portPid") -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+                if ($p.ExitCode -eq 0) {
+                    Write-Host "Stopped PID=$portPid on port $Port (taskkill)"
+                    $stillAlive = $false
+                }
+            } catch {
+                # ignore
+            }
+        }
+        if ($stillAlive -and (Get-Process -Id $portPid -ErrorAction SilentlyContinue)) {
+            Write-Warning @"
+仍无法结束 PID=${portPid}（常见原因：Redis 以 Windows 服务 / SYSTEM / 管理员身份启动，当前 PowerShell 权限不足）。
+请任选其一：
+  1) 右键「以管理员身份运行」PowerShell，再执行： .\scripts\dev_stack.ps1 -Action stop -All
+  2) 若 Redis 是服务： services.msc 中找到 Redis 并「停止」
+  3) 管理员 CMD： taskkill /F /PID ${portPid}
+"@
         }
     }
 }
@@ -129,6 +154,13 @@ function Start-One([string]$name, [hashtable]$pids) {
     $proc = Start-Process -FilePath "powershell" -ArgumentList @("-NoProfile", "-Command", $psCmd) -PassThru -WindowStyle Minimized
     $pids[$name] = $proc.Id
     Write-Host "[$name] started (PID=$($proc.Id), port=$($svc.Port))"
+    if ($name -eq "redis") {
+        Start-Sleep -Milliseconds 500
+        $listen = @(Get-NetTCPConnection -LocalPort $svc.Port -State Listen -ErrorAction SilentlyContinue)
+        if ($listen.Count -eq 0) {
+            Write-Warning "[$name] 端口 $($svc.Port) 未处于 Listen。常见原因：旧实例（如 Windows 服务）仍占用端口，或 redis-server 启动失败。请查看 $($svc.Log)"
+        }
+    }
 }
 
 function Stop-One([string]$name, [hashtable]$pids) {
@@ -180,7 +212,7 @@ function Start-Targets {
     }
     Write-Pids -map $pids
 
-    if ($OpenBrowser) {
+    if ($OpenBrowser -or $script:OpenBrowserFromMenu) {
         $targets = Resolve-Targets
         if ($targets -contains "frontend" -or $All) {
             try {
@@ -234,9 +266,9 @@ function Run-Menu {
         Show-Menu
         $choice = Read-Host "Select"
         switch ($choice) {
-            "1" { $script:All = $true; Start-Targets }
+            "1" { $script:All = $true; $script:OpenBrowserFromMenu = $true; Start-Targets; $script:OpenBrowserFromMenu = $false }
             "2" { $script:All = $true; Stop-Targets }
-            "3" { $script:All = $true; Restart-Targets }
+            "3" { $script:All = $true; $script:OpenBrowserFromMenu = $true; Restart-Targets; $script:OpenBrowserFromMenu = $false }
             "4" { $script:All = $true; Status-Targets }
             "5" {
                 $target = Read-Host "Service name"
