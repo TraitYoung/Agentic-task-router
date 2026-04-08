@@ -4,7 +4,7 @@
 - Round 1: 触发医疗熔断节点 node_qianjin，验证是否正确阻断工作流。
 - Round 2: 触发情绪疏导节点 node_bina，验证是否根据时间切换视觉规则。
 - Round 3: 触发宏观战略节点 node_chizheng，验证结论先行与降噪表现。
-- Round 4: 触发逻辑节点 node_taki_bit，验证 Q1 历史上下文是否注入。
+- Round 4: 触发 Bit 节点，验证 Q1 历史上下文是否注入。
 """
 
 from agents.router import app

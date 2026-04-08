@@ -30,8 +30,8 @@ function agentName(taskType?: string) {
   switch (taskType) {
     case "emotion":
       return "情绪（bina）";
-    case "taki":
-      return "文档（taki）";
+    case "jean":
+      return "文档（Jean）";
     case "bit":
       return "代码（bit）";
     case "juzheng":

@@ -18,7 +18,7 @@ def run_memory_test():
     """
     手工回归脚本：
     1. Round 1 注入一条 Q1 级别的高危指令，观察是否写入 SQLite。
-    2. Round 2 再发起一条普通逻辑任务，观察 Taki 是否带出历史 Q1 上下文。
+    2. Round 2 再发起一条普通逻辑任务，观察 Bit 是否带出历史 Q1 上下文。
     """
     _print_header()
 
@@ -44,7 +44,7 @@ def run_memory_test():
     # ==========================================
     # Round 2: 测试历史记忆跨会话唤醒
     # ==========================================
-    _print_divider("[Round 2] 跨回合唤醒 Q1（预期：Taki 前置 Q1 警告）")
+    _print_divider("[Round 2] 跨回合唤醒 Q1（预期：Bit 前置 Q1 警告）")
     input_2 = "帮我随便写一个 Python 的冒泡排序吧。"
     print(f"🗣️ 陛下输入（普通逻辑任务）:\n{input_2}\n")
 
@@ -54,7 +54,7 @@ def run_memory_test():
         "final_response", "未获取到 final_response，请检查路由节点输出"
     )
 
-    print("🤖 [Taki 节点最终输出全文]:\n")
+    print("🤖 [Bit 节点最终输出全文]:\n")
     print(final_resp)
 
     # 简单可视化判断：是否带出了 Q1 提醒
@@ -62,7 +62,7 @@ def run_memory_test():
     if "历史遗留 Q1 任务警告" in final_resp:
         print("   ✅ 检测到『历史遗留 Q1 任务警告』前缀，跨回合记忆唤醒正常。")
     else:
-        print("   ⚠️ 未检测到 Q1 警告前缀，请检查 node_taki_bit 是否正确注入上下文。")
+        print("   ⚠️ 未检测到 Q1 警告前缀，请检查 node_bit 是否正确注入上下文。")
 
 
 if __name__ == "__main__":

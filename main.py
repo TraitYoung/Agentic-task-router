@@ -91,7 +91,7 @@ async def chat_api(payload: ChatRequest, x_session_id: str | None = Header(defau
     # 由前端网关统一决定输出前缀（拼音）
     prefix_map = {
         "emotion": "bina",
-        "taki": "taki",
+        "jean": "jean",
         "bit": "bit",
         "juzheng": "juzheng",
         "unknown": "juzheng",
@@ -152,7 +152,7 @@ async def chat_stream_api(payload: ChatRequest, x_session_id: str | None = Heade
 
     prefix_map = {
         "emotion": "bina",
-        "taki": "taki",
+        "jean": "jean",
         "bit": "bit",
         "juzheng": "juzheng",
         "unknown": "juzheng",

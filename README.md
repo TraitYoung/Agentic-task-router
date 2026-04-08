@@ -7,7 +7,7 @@
 Axiodrasil 是一个面向高压学习/项目场景的 **数字助理团** 系统。  
 它基于 LangGraph + 千问 (Qwen)，把不同类型问题分发给不同助理，并配套记忆与检索能力：
 
-- **路由层**：把输入解析为结构化 `TaskIntent`，分发到「情绪助理 Bina」「文档助理 Taki」「技术助理 Bit」「战略助理 Juzheng」；当 `pain_level > 6` 时优先进入情绪节点做熔断。
+- **路由层**：把输入解析为结构化 `TaskIntent`，分发到「情绪助理 Bina」「文档助理 Jean」「技术助理 Bit」「战略助理 Juzheng」；当 `pain_level > 6` 时优先进入情绪节点做熔断。
 - **记忆层**：将重要/战略对话（Q1/Q2）写入 SQLite「L3 记忆矩阵」，并维护 FTS5 全文索引与向量表。
 - **检索层（Hybrid RAG）**：对 Q2 记忆使用 FTS5 + 向量召回 + RRF 融合，支持长期规划类问题回忆。
 
@@ -105,7 +105,7 @@ taskkill /PID <上一步的PID> /F
 1. **路由引擎层（agents/router.py）**
    - 基于 **LangGraph StateGraph**；
    - 状态 `GraphState = {current_input, thread_id, recent_history, intent, final_response}`；
-   - 入口节点：`parser`；出口节点：`emotion_agent / taki_agent / bit_agent / juzheng_agent`。
+   - 入口节点：`parser`；出口节点：`emotion_agent / jean_agent / bit_agent / juzheng_agent`。
 2. **记忆矩阵层（memory/database.py）**
    - SQLite 主表 `memory_matrix` 存储 `thread_id / quadrant / content / status / created_at`；
    - 向量表 `memory_embeddings` 以 BLOB 形式存储 1536 维 float32 向量；
@@ -191,7 +191,7 @@ User Input
 - **核心文件**：`agents/router.py`
 - **关键概念**：
   - `TaskIntent`（见 `schemas/protocols.py`）：
-    - `task_type ∈ {emotion, taki, bit, juzheng, unknown}`
+    - `task_type ∈ {emotion, jean, bit, juzheng, unknown}`
     - `urgency_level ∈ [1,5]`
     - `pain_level ∈ [1,10]`，>6 触发医疗熔断优先级
     - `quadrant ∈ {Q1, Q2, Q3, Q4}`（艾森豪威尔象限）
@@ -208,7 +208,7 @@ User Input
    - 若 `pain_level > 6` → 无视 `task_type`，强制路由到 `emotion_agent`（医疗逻辑并入情绪节点）。
 3. **业务分发**：
    - `task_type = emotion` → `emotion_agent`（bina）
-   - `task_type = taki` → `taki_agent`
+   - `task_type = jean` → `jean_agent`
    - `task_type = bit` → `bit_agent`
    - `task_type = juzheng` → `juzheng_agent`
 
@@ -216,10 +216,10 @@ User Input
 
 - `emotion_agent`（情绪 / bina）：
   - 负责情绪支持；当 `pain_level > 6` 时注入医疗红线内容，强制阻断工作流并给出身体动作建议。
-- `taki_agent`（文档 / taki）：
+- `jean_agent`（文档 / jean）：
   - 文档管理节点：基于 `hybrid_engine.HybridRetriever` 对 Q2 材料做 Hybrid 检索，输出关键要点 + 阅读/处理路线。
 - `bit_agent`（技术 / bit）：
-  - 代码/专业知识管理节点：采用 `create_react_agent(llm, tools=TAKI_TOOLS)` 进行工具链调用（联网/沙盒执行/写文件受控授权等）。
+  - 代码/专业知识管理节点：采用 `create_react_agent(llm, tools=BIT_TOOLS)` 进行工具链调用（联网/沙盒执行/写文件受控授权等）。
   - 会从 SQLite 的 Q1 未完成任务读取上下文，注入到 Bit 的执行 prompt。
 - `juzheng_agent`（战略 / juzheng）：
   - 战略管理节点：提供计划拆解、步骤安排与复盘框架（结论先行、可落地）。

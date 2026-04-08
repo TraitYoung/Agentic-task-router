@@ -16,10 +16,10 @@ from prompts.system_prompts import (
     BINA_PROMPT_TEMPLATE,
     BIT_SYSTEM_PROMPT,
     JUZHENG_PROMPT,
-    TAKI_PROMPT,
+    JEAN_PROMPT,
 )
 from schemas.protocols import TaskIntent
-from tools.agent_tools import TAKI_TOOLS, execute_python
+from tools.agent_tools import BIT_TOOLS, execute_python
 from tools.ai_client import get_embedding
 
 # 初始化记忆中枢
@@ -79,10 +79,10 @@ def node_parser(state: GraphState):
 - Q4 (Noise): 包含闲聊、无意义符号、背景噪音。
 
 [硬性规则]
-1. task_type 只能是 emotion、taki、bit、juzheng、unknown 之一。
+1. task_type 只能是 emotion、jean、bit、juzheng、unknown 之一。
 2. task_type 语义定义：
    - emotion：情绪疏导/安抚/吐槽/求支持（包含医疗红线熔断场景）。
-   - taki：文档/资料管理（整理要点、阅读路线、基于检索材料的摘要）。
+   - jean：文档/资料管理（整理要点、阅读路线、基于检索材料的摘要）。
    - bit：代码/专业知识管理（推导、审计、给可运行代码/必要工具）。
    - juzheng：战略管理（计划、步骤拆解、复盘框架、长期安排）。
    - unknown：无法稳定判断时使用。
@@ -123,7 +123,7 @@ def node_parser(state: GraphState):
                 content=real_intent.raw_input,
                 quadrant=quadrant,
             )
-            print(f"📦 [Taki 归档]: 已将 {quadrant} 级别指令存入 L3 矩阵。")
+            print(f"📦 [Jean 归档]: 已将 {quadrant} 级别指令存入 L3 矩阵。")
     except Exception as e:
         print(f"⚠️ [Bit 警报]: 记忆写入失败: {e}")
 
@@ -143,7 +143,7 @@ def node_parser(state: GraphState):
 #     )
 #     return {"intent": dummy_intent}
 
-def node_taki(state: GraphState):
+def node_jean(state: GraphState):
     """文档管理节点：基于 Hybrid RAG 输出阅读路线/要点摘要"""
     intent = state["intent"]
     thread_id = state.get("thread_id", MAIN_THREAD_ID)
@@ -154,7 +154,7 @@ def node_taki(state: GraphState):
     try:
         query_embedding = get_embedding(query)
     except Exception as e:
-        print(f"⚠️ [Taki] embedding 获取失败，退化为仅关键词召回: {e}")
+        print(f"⚠️ [Jean] embedding 获取失败，退化为仅关键词召回: {e}")
 
     try:
         docs = retriever.search_hybrid(
@@ -174,7 +174,7 @@ def node_taki(state: GraphState):
                 quadrant="Q2",
             )
     except Exception as e:
-        print(f"⚠️ [Taki] hybrid 检索失败，返回空材料: {e}")
+        print(f"⚠️ [Jean] hybrid 检索失败，返回空材料: {e}")
         docs = []
 
     if docs:
@@ -197,13 +197,13 @@ def node_taki(state: GraphState):
     )
 
     try:
-        messages = [SystemMessage(content=TAKI_PROMPT), HumanMessage(content=user_status)]
+        messages = [SystemMessage(content=JEAN_PROMPT), HumanMessage(content=user_status)]
         response = llm.invoke(messages)
         final_text = response.content
     except Exception as e:
         final_text = f"文档管理节点执行失败，无法完成整理。 (Error: {e})"
 
-    return {"final_response": final_text, "active_task_type": "taki"}
+    return {"final_response": final_text, "active_task_type": "jean"}
 
 
 def node_bit(state: GraphState):
@@ -271,7 +271,7 @@ def node_bit(state: GraphState):
 
     try:
         # 3. 组装 LangGraph 原生 ReAct Agent
-        agent = create_react_agent(llm, tools=TAKI_TOOLS)
+        agent = create_react_agent(llm, tools=BIT_TOOLS)
 
         # 4. 执行任务：显式注入 System Prompt + 用户请求
         user_msg = (
@@ -382,8 +382,8 @@ def route_by_intent(state: GraphState):
     # 正常分发：四分区路由
     if intent.task_type == "emotion":
         return "emotion_route"
-    if intent.task_type == "taki":
-        return "taki_route"
+    if intent.task_type == "jean":
+        return "jean_route"
     if intent.task_type == "bit":
         return "bit_route"
     if intent.task_type == "juzheng":
@@ -397,7 +397,7 @@ workflow = StateGraph(GraphState)
 
 workflow.add_node("parser", node_parser)
 workflow.add_node("emotion_agent", node_bina)
-workflow.add_node("taki_agent", node_taki)
+workflow.add_node("jean_agent", node_jean)
 workflow.add_node("bit_agent", node_bit)
 workflow.add_node("juzheng_agent", node_juzheng)
 
@@ -409,14 +409,14 @@ workflow.add_conditional_edges(
     route_by_intent,
     {
         "emotion_route": "emotion_agent",
-        "taki_route": "taki_agent",
+        "jean_route": "jean_agent",
         "bit_route": "bit_agent",
         "juzheng_route": "juzheng_agent",
     },
 )
 
 workflow.add_edge("emotion_agent", END)
-workflow.add_edge("taki_agent", END)
+workflow.add_edge("jean_agent", END)
 workflow.add_edge("bit_agent", END)
 workflow.add_edge("juzheng_agent", END)
 

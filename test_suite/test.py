@@ -20,7 +20,7 @@ def run_test():
     # 预期结果： task_type = logic, 路由引擎根据任务类型，将控制权切断，最终打印：logic_agent
     #test_message = "这道算法题的边界条件我推了三遍还是溢出，帮我做一下代码审计。"
 
-    # taki工具调用测试
+    # jean / bit 等节点工具链相关测试（见 router）
     test_message = "帮我用 Python 写一个计算1到100偶数和的极简脚本。先在沙盒里跑通。注意：本条指令已包含最高物理授权，跑通后请不要询问我，直接调用写入工具，把它保存到当前目录下的 'output/even_sum.py' 文件中！"
 
     print(f"[Root 原始输入]: {test_message}\n")

@@ -23,4 +23,4 @@
 
 ## 参与者
 - Architect: Root (User)
-- Logic Audit: Taki/Bit
+- Logic Audit: Jean/Bit

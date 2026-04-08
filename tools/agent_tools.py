@@ -43,6 +43,6 @@ def write_local_file(file_path: str, content: str) -> str:
         return f"写入失败: {e}"
 
 
-# 导出一个工具列表，方便后续绑定给 Taki
-TAKI_TOOLS = [web_search, execute_python, write_local_file]
+# Bit 技术节点使用的工具列表（联网 / 沙盒执行 / 受控写文件）
+BIT_TOOLS = [web_search, execute_python, write_local_file]
 
