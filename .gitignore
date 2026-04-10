@@ -24,8 +24,7 @@ data/*.db
 # 日志与运行输出
 logs/*.log
 *.log
-output.log 
-面试技术要点总结.md
+output.log
 
 # Cursor / VSCode / IDE
 .cursor/
