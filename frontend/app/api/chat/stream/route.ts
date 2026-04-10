@@ -6,8 +6,9 @@ export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
   const sessionId = req.headers.get("x-session-id") || undefined;
+  const traceId = req.headers.get("x-trace-id") || undefined;
 
-  let payload: { text?: string } = {};
+  let payload: { text?: string; workflow_mode?: string } = {};
   try {
     payload = await req.json();
   } catch {
@@ -18,19 +19,25 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ detail: "missing field: text" }, { status: 400 });
   }
 
+  const backendBody: Record<string, string> = { text: payload.text };
+  if (payload.workflow_mode && payload.workflow_mode !== "default") {
+    backendBody.workflow_mode = payload.workflow_mode;
+  }
+
   const backendUrl = `${getBackendBaseUrl()}/api/v1/chat/stream`;
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
   if (sessionId) headers["x-session-id"] = sessionId;
+  if (traceId) headers["x-trace-id"] = traceId;
 
   let backendRes: Response;
   try {
     backendRes = await fetch(backendUrl, {
       method: "POST",
       headers,
-      body: JSON.stringify({ text: payload.text }),
+      body: JSON.stringify(backendBody),
       signal: AbortSignal.timeout(600_000),
     });
   } catch (e) {
@@ -49,14 +56,18 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const outHeaders: Record<string, string> = {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+  };
+  const backendTrace = backendRes.headers.get("x-trace-id");
+  if (backendTrace) outHeaders["x-trace-id"] = backendTrace;
+
   // 直接透传 SSE 流：让浏览器接收 data: ...\n\n 事件
   return new Response(backendRes.body, {
     status: backendRes.status,
-    headers: {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-    },
+    headers: outHeaders,
   });
 }
 

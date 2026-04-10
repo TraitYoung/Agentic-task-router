@@ -6,11 +6,37 @@ type Intent = {
   task_type?: string;
 };
 
+type TraceStepRow = {
+  index: number;
+  node: string;
+  ts: string;
+  duration_ms: number;
+  keys_written: string[];
+  summary: Record<string, unknown>;
+};
+
 type SSEMsg =
   | { type: "meta"; session_id: string; intent: Intent }
-  | { session_id: string; intent: Intent }
+  | {
+      session_id: string;
+      intent: Intent;
+      trace_id?: string;
+      trace?: TraceStepRow[];
+    }
   | { type: "delta"; content: string }
   | { type: "done" };
+
+function isChatMeta(
+  obj: object,
+): obj is {
+  session_id: string;
+  intent: Intent;
+  trace_id?: string;
+  trace?: TraceStepRow[];
+  workflow_mode?: string;
+} {
+  return "session_id" in obj && "intent" in obj;
+}
 
 type ChatTurn = {
   user: string;
@@ -41,9 +67,11 @@ function agentName(taskType?: string) {
   }
 }
 
+type UiMode = "chat" | "clean" | "dev_pipeline";
+
 export default function Home() {
   const TURN_LIMIT = 50;
-  const [mode, setMode] = useState<"chat" | "clean">("chat");
+  const [mode, setMode] = useState<UiMode>("chat");
   const [sessionId, setSessionId] = useState<string>("");
   const [text, setText] = useState<string>("");
   const [reply, setReply] = useState<string>("");
@@ -66,6 +94,8 @@ export default function Home() {
   const [systemFileContent, setSystemFileContent] = useState<string>("");
   const [stackOk, setStackOk] = useState<boolean | null>(null);
   const [stackHint, setStackHint] = useState<string>("");
+  const [traceId, setTraceId] = useState<string>("");
+  const [traceSteps, setTraceSteps] = useState<TraceStepRow[]>([]);
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -198,10 +228,12 @@ export default function Home() {
     if (!sessionId || loading) return true;
     if (history.length >= TURN_LIMIT) return true;
     if (mode === "clean") return false;
+    if (mode === "dev_pipeline") return !text.trim();
     return !text.trim();
   }, [loading, mode, sessionId, text, history.length]);
 
   function composePayloadText(): string {
+    if (mode === "dev_pipeline") return text.trim();
     if (mode !== "clean") return text.trim();
 
     const baseTask = text.trim() || "请执行日志清洗任务";
@@ -247,18 +279,27 @@ export default function Home() {
     setError("");
     setReply("");
     setActiveAgent("");
+    setTraceId("");
+    setTraceSteps([]);
 
     const controller = new AbortController();
     abortRef.current = controller;
 
     try {
+      const outboundTraceId =
+        typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : "";
+      const workflow_mode = mode === "dev_pipeline" ? "dev_pipeline" : "default";
       const res = await fetch("/api/chat/stream", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "x-session-id": sessionId,
+          ...(outboundTraceId ? { "x-trace-id": outboundTraceId } : {}),
         },
-        body: JSON.stringify({ text: composePayloadText().slice(0, 12000) }),
+        body: JSON.stringify({
+          text: composePayloadText().slice(0, 12000),
+          workflow_mode,
+        }),
         signal: controller.signal,
       });
 
@@ -295,8 +336,12 @@ export default function Home() {
           const parsed = safeParseJson(jsonStr);
           if (!parsed || typeof parsed !== "object") continue;
           const msg = parsed as SSEMsg;
-          if ("session_id" in msg && "intent" in msg) {
-            setActiveAgent(agentName(msg.intent?.task_type));
+          if (isChatMeta(parsed)) {
+            const wf = parsed.workflow_mode;
+            if (wf === "dev_pipeline") setActiveAgent("AI 软件工程流水线");
+            else setActiveAgent(agentName(parsed.intent?.task_type));
+            if (parsed.trace_id) setTraceId(parsed.trace_id);
+            if (parsed.trace && Array.isArray(parsed.trace)) setTraceSteps(parsed.trace);
             continue;
           }
           if ("type" in msg && msg.type === "delta") {
@@ -443,7 +488,7 @@ export default function Home() {
             </div>
           ) : null}
 
-          <div className="mb-3 flex gap-2">
+          <div className="mb-3 flex flex-wrap gap-2">
             <button
               type="button"
               className={`px-3 py-1.5 rounded-lg text-sm border disabled:opacity-50 disabled:cursor-not-allowed ${
@@ -454,7 +499,19 @@ export default function Home() {
               onClick={() => setMode("chat")}
               disabled={loading}
             >
-              聊天模式
+              教学测试
+            </button>
+            <button
+              type="button"
+              className={`px-3 py-1.5 rounded-lg text-sm border disabled:opacity-50 disabled:cursor-not-allowed ${
+                mode === "dev_pipeline"
+                  ? "bg-black text-white border-black dark:bg-white dark:text-black dark:border-white"
+                  : "bg-transparent border-zinc-300 dark:border-zinc-700"
+              }`}
+              onClick={() => setMode("dev_pipeline")}
+              disabled={loading}
+            >
+              AI 软件工程
             </button>
             <button
               type="button"
@@ -470,18 +527,41 @@ export default function Home() {
             </button>
           </div>
 
+          {mode === "dev_pipeline" ? (
+            <div className="mb-2 text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
+              对标教材里的需求、迭代、DoD、回顾等实践，用 AI 做多步结构化交付：用户故事与 Sprint 目标 → 有序待办与架构
+              → 实现草案 → 测试 / 完成定义 / CHANGELOG / CI 提示 / 短回顾。后几步只携带上一步 JSON 摘要，控制 Token。
+              若输入包含「游戏客户端工具 / Unity / Unreal / 资源管线」关键词，会自动启用岗位画像增强输出。
+            </div>
+          ) : null}
+
           <div className="flex gap-2">
-            <input
-              className="flex-1 border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2 bg-transparent text-sm"
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder="输入：情绪/文档/代码/战略（例如：把 README 变成阅读路线）"
-              maxLength={1000}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) onSend();
-              }}
-              disabled={loading}
-            />
+            {mode === "clean" ? (
+              <input
+                className="flex-1 border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2 bg-transparent text-sm"
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                placeholder="清洗模式简短任务描述（可选）"
+                maxLength={1000}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) onSend();
+                }}
+                disabled={loading}
+              />
+            ) : (
+              <textarea
+                className="flex-1 border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2 bg-transparent text-sm min-h-[100px] resize-y"
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                placeholder={
+                  mode === "dev_pipeline"
+                    ? "描述要做的功能/服务/脚本（目标用户、输入输出、约束、技术栈、验收期望）；越具体越接近「书上那一套」交付物"
+                    : "输入：需求分析/文档整理/代码实现/方案评审（例如：把 README 变成阅读路线）"
+                }
+                maxLength={12000}
+                disabled={loading}
+              />
+            )}
             {!loading ? (
               <button
                 type="button"
@@ -493,7 +573,7 @@ export default function Home() {
                     ? "正在初始化会话…"
                     : history.length >= TURN_LIMIT
                       ? "已达轮次上限，请新建对话"
-                      : mode === "chat" && !text.trim()
+                      : (mode === "chat" || mode === "dev_pipeline") && !text.trim()
                         ? "请先输入内容"
                         : undefined
                 }
@@ -628,6 +708,34 @@ export default function Home() {
             <pre className="whitespace-pre-wrap bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg p-3 text-sm min-h-[120px]">
               {reply || (loading ? "正在生成..." : "等待输入")}
             </pre>
+            {traceSteps.length > 0 ? (
+              <details className="mt-3 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50/80 dark:bg-zinc-950/40 px-3 py-2 text-xs">
+                <summary className="cursor-pointer font-medium text-zinc-700 dark:text-zinc-200">
+                  全链路追踪（{traceSteps.length} 步）
+                  {traceId ? (
+                    <span className="ml-2 font-mono text-zinc-500 dark:text-zinc-400">
+                      {traceId.slice(0, 8)}…
+                    </span>
+                  ) : null}
+                </summary>
+                <ol className="mt-2 space-y-2 list-decimal pl-4 text-zinc-600 dark:text-zinc-300">
+                  {traceSteps.map((s) => (
+                    <li key={`${s.index}-${s.node}`} className="break-words">
+                      <span className="font-mono text-zinc-800 dark:text-zinc-100">{s.node}</span>
+                      <span className="text-zinc-400 dark:text-zinc-500"> · {s.duration_ms} ms</span>
+                      {s.keys_written.length > 0 ? (
+                        <div className="text-zinc-500 dark:text-zinc-400 mt-0.5">
+                          keys: {s.keys_written.join(", ")}
+                        </div>
+                      ) : null}
+                      <pre className="mt-1 whitespace-pre-wrap break-words text-[11px] bg-white/60 dark:bg-black/30 rounded p-2 border border-zinc-100 dark:border-zinc-800 max-h-40 overflow-y-auto">
+                        {JSON.stringify(s.summary, null, 2)}
+                      </pre>
+                    </li>
+                  ))}
+                </ol>
+              </details>
+            ) : null}
           </div>
 
           <div className="mt-6 flex-1 min-h-[32vh]">
