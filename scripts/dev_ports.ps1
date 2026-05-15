@@ -81,7 +81,8 @@ function Restart-RedisDev {
 }
 
 function Restart-BackendDev {
-    Restart-PortServiceWithConfirm -Port 8000 -StartCommand 'python -m uvicorn main:app --host 127.0.0.1 --port 8000 --reload'
+    $backendRoot = Join-Path (Split-Path -Parent $PSScriptRoot) "backend"
+    Restart-PortServiceWithConfirm -Port 8000 -StartCommand "Set-Location '$backendRoot'; python -m uvicorn main:app --host 127.0.0.1 --port 8000 --reload"
 }
 
 function Restart-FrontendDev {

@@ -1,10 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-
-type Intent = {
-  task_type?: string;
-};
+import { useEffect, useRef, useState, useCallback } from "react";
+import { canSendMessage, shouldSendOnEnter } from "./chatComposer";
 
 type TraceStepRow = {
   index: number;
@@ -15,34 +12,16 @@ type TraceStepRow = {
   summary: Record<string, unknown>;
 };
 
-type SSEMsg =
-  | { type: "meta"; session_id: string; intent: Intent }
-  | {
-      session_id: string;
-      intent: Intent;
-      trace_id?: string;
-      trace?: TraceStepRow[];
-    }
-  | { type: "delta"; content: string }
-  | { type: "done" };
-
-function isChatMeta(
-  obj: object,
-): obj is {
-  session_id: string;
-  intent: Intent;
-  trace_id?: string;
-  trace?: TraceStepRow[];
-  workflow_mode?: string;
-} {
-  return "session_id" in obj && "intent" in obj;
-}
-
-type ChatTurn = {
-  user: string;
-  assistant: string;
+type Message = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
   ts: string;
+  traceId?: string;
+  traceSteps?: TraceStepRow[];
 };
+
+type UiMode = "spec" | "review";
 
 function safeParseJson(line: string): unknown | null {
   try {
@@ -52,67 +31,145 @@ function safeParseJson(line: string): unknown | null {
   }
 }
 
-function agentName(taskType?: string) {
-  switch (taskType) {
-    case "emotion":
-      return "情绪（bina）";
-    case "jean":
-      return "文档（Jean）";
-    case "bit":
-      return "代码（bit）";
-    case "juzheng":
-      return "战略（juzheng）";
-    default:
-      return "未知";
+function formatTs(ts: string): string {
+  try {
+    return new Date(ts).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+  } catch {
+    return "";
   }
 }
 
-type UiMode = "chat" | "clean" | "dev_pipeline";
+function TracePanel({ steps, traceId }: { steps: TraceStepRow[]; traceId?: string }) {
+  if (!steps.length) return null;
+  return (
+    <details className="mt-2 rounded-lg border border-zinc-200 text-xs">
+      <summary className="cursor-pointer select-none px-3 py-2 font-medium text-zinc-500 hover:text-zinc-700 transition-colors">
+        链路追踪 ({steps.length} 步)
+        {traceId && (
+          <span className="ml-2 font-mono text-zinc-400">{traceId.slice(0, 8)}…</span>
+        )}
+      </summary>
+      <ol className="px-4 pb-3 pt-2 space-y-2 list-decimal text-zinc-600">
+        {steps.map((s) => (
+          <li key={`${s.index}-${s.node}`} className="break-words">
+            <span className="font-mono text-zinc-800">{s.node}</span>
+            <span className="text-zinc-400"> · {s.duration_ms} ms</span>
+            <pre className="mt-1 whitespace-pre-wrap break-words text-[11px] bg-zinc-50 rounded p-2 border border-zinc-100 max-h-32 overflow-y-auto">
+              {JSON.stringify(s.summary, null, 2)}
+            </pre>
+          </li>
+        ))}
+      </ol>
+    </details>
+  );
+}
+
+function AssistantBubble({ msg, isStreaming, elapsed }: { msg: Message; isStreaming: boolean; elapsed: number }) {
+  const [copied, setCopied] = useState(false);
+
+  async function onCopy() {
+    if (!msg.content) return;
+    await navigator.clipboard.writeText(msg.content);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  return (
+    <div className="group flex flex-col gap-1 max-w-[80%]">
+      <div className="relative rounded-2xl rounded-tl-sm bg-zinc-100 px-4 py-3 text-sm text-zinc-900 leading-relaxed">
+        {isStreaming && !msg.content ? (
+          <span className="flex items-center gap-1.5 text-zinc-400">
+            <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce [animation-delay:0ms]" />
+            <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce [animation-delay:150ms]" />
+            <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce [animation-delay:300ms]" />
+            {elapsed > 2 && (
+              <span className="ml-1 text-[11px]">等待中 {elapsed}s…</span>
+            )}
+          </span>
+        ) : (
+          <pre className="whitespace-pre-wrap break-words font-mono text-[13px] leading-relaxed">
+            {msg.content}
+          </pre>
+        )}
+        {msg.content && !isStreaming && (
+          <button
+            type="button"
+            onClick={onCopy}
+            className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity px-2 py-1 text-[11px] rounded bg-white border border-zinc-200 text-zinc-500 hover:text-zinc-800"
+          >
+            {copied ? "已复制" : "复制"}
+          </button>
+        )}
+      </div>
+      {msg.ts && (
+        <span className="text-[11px] text-zinc-400 pl-1">{formatTs(msg.ts)}</span>
+      )}
+      {msg.traceSteps && msg.traceSteps.length > 0 && (
+        <TracePanel steps={msg.traceSteps} traceId={msg.traceId} />
+      )}
+    </div>
+  );
+}
+
+function UserBubble({ msg }: { msg: Message }) {
+  return (
+    <div className="flex flex-col items-end gap-1 max-w-[80%] self-end">
+      <div className="rounded-2xl rounded-tr-sm bg-zinc-900 px-4 py-3 text-sm text-white leading-relaxed">
+        <pre className="whitespace-pre-wrap break-words font-sans">{msg.content}</pre>
+      </div>
+      {msg.ts && (
+        <span className="text-[11px] text-zinc-400 pr-1">{formatTs(msg.ts)}</span>
+      )}
+    </div>
+  );
+}
 
 export default function Home() {
-  const TURN_LIMIT = 50;
-  const [mode, setMode] = useState<UiMode>("chat");
-  const [sessionId, setSessionId] = useState<string>("");
-  const [text, setText] = useState<string>("");
-  const [reply, setReply] = useState<string>("");
-  const [activeAgent, setActiveAgent] = useState<string>("");
-  const [loading, setLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string>("");
-  const [exporting, setExporting] = useState<boolean>(false);
-  const [exportMessage, setExportMessage] = useState<string>("");
-  const [history, setHistory] = useState<ChatTurn[]>([]);
-  const [activeTurnIdx, setActiveTurnIdx] = useState<number>(-1);
-  const [inputDir, setInputDir] = useState<string>("input");
-  const [defaultFiles, setDefaultFiles] = useState<string[]>([]);
-  const [selectedDefaultFile, setSelectedDefaultFile] = useState<string>("");
-  const [selectedDefaultFileContent, setSelectedDefaultFileContent] = useState<string>("");
-  const [customFileName, setCustomFileName] = useState<string>("");
-  const [customFileContent, setCustomFileContent] = useState<string>("");
-  const [systemMode, setSystemMode] = useState<"manual" | "file">("manual");
-  const [manualSystemInstruction, setManualSystemInstruction] = useState<string>("");
-  const [systemFileName, setSystemFileName] = useState<string>("");
-  const [systemFileContent, setSystemFileContent] = useState<string>("");
-  const [stackOk, setStackOk] = useState<boolean | null>(null);
-  const [stackHint, setStackHint] = useState<string>("");
-  const [traceId, setTraceId] = useState<string>("");
-  const [traceSteps, setTraceSteps] = useState<TraceStepRow[]>([]);
-
-  const abortRef = useRef<AbortController | null>(null);
-
-  useEffect(() => {
+  const [mode, setMode] = useState<UiMode>("spec");
+  const [sessionId, setSessionId] = useState<string>(() => {
     try {
       const cached = window.localStorage.getItem("x-session-id");
-      if (cached) {
-        setSessionId(cached);
-        return;
-      }
-      const id = crypto.randomUUID();
+      if (cached) return cached;
+    } catch { /* ignore */ }
+    const id = crypto.randomUUID();
+    try { window.localStorage.setItem("x-session-id", id); } catch { /* ignore */ }
+    return id;
+  });
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [streamingId, setStreamingId] = useState<string | null>(null);
+  const [text, setText] = useState("");
+  const [isComposing, setIsComposing] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [stackOk, setStackOk] = useState<boolean | null>(null);
+  const [stackHint, setStackHint] = useState("");
+  const [exporting, setExporting] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+
+  const abortRef = useRef<AbortController | null>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  function newSession() {
+    const id = crypto.randomUUID();
+    try {
       window.localStorage.setItem("x-session-id", id);
-      setSessionId(id);
-    } catch {
-      setSessionId(crypto.randomUUID());
+    } catch { /* ignore */ }
+    setSessionId(id);
+    setMessages([]);
+    setError("");
+    setText("");
+    setIsComposing(false);
+  }
+
+  useEffect(() => {
+    if (!loading) {
+      setElapsed(0);
+      return;
     }
-  }, []);
+    const id = setInterval(() => setElapsed((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [loading]);
 
   useEffect(() => {
     void (async () => {
@@ -121,22 +178,16 @@ export default function Home() {
         const data = (await res.json().catch(() => ({}))) as {
           ok?: boolean;
           detail?: string;
-          backend?: string;
           backendHealth?: { redis?: boolean };
         };
         if (res.ok && data.ok) {
           setStackOk(true);
-          if (data.backendHealth && data.backendHealth.redis === false) {
-            setStackHint("Redis 未连通：历史/导出可能异常，请检查 6379 或停掉系统 Redis 后重开 dev_stack。");
-          } else {
-            setStackHint("");
+          if (data.backendHealth?.redis === false) {
+            setStackHint("Redis 未连通：会话缓存不可用，但不影响核心功能。");
           }
         } else {
           setStackOk(false);
-          setStackHint(
-            data.detail ||
-              `Next 无法访问后端 ${data.backend || "127.0.0.1:8000"}，请确认 uvicorn 已在本机 8000 监听。`
-          );
+          setStackHint(data.detail || "无法连接后端，请确认 uvicorn 已在本机 8000 监听。");
         }
       } catch (e) {
         setStackOk(false);
@@ -145,150 +196,83 @@ export default function Home() {
     })();
   }, []);
 
-  useEffect(() => {
-    if (!sessionId) return;
-    void (async () => {
+  const loadHistory = useCallback(
+    async (sid: string) => {
+      if (!sid) return;
       try {
         const res = await fetch("/api/chat/history", {
           method: "GET",
-          headers: {
-            "x-session-id": sessionId,
-          },
+          headers: { "x-session-id": sid },
         });
-        if (!res.ok) {
-          const data = (await res.json().catch(() => ({}))) as { detail?: string };
-          setError(
-            data.detail ||
-              `加载历史失败 (HTTP ${res.status})。若页面卡住过久，多半是 Redis 阻塞或后端未启动。`
-          );
-          return;
-        }
-        setError("");
-        const data = (await res.json()) as { turns?: ChatTurn[] };
-        const turns = data.turns || [];
-        setHistory(turns);
-        setActiveTurnIdx(turns.length > 0 ? turns.length - 1 : -1);
-      } catch {
-        setError("加载历史时网络错误，请确认前端 dev 与后端均已启动。");
-      }
-    })();
-  }, [sessionId]);
-
-  async function loadDefaultFiles(dir: string) {
-    try {
-      const res = await fetch(`/api/cleaning/files?dir=${encodeURIComponent(dir)}`);
-      const data = (await res.json()) as { files?: string[]; detail?: string };
-      if (!res.ok) {
-        throw new Error(data?.detail || `HTTP ${res.status}`);
-      }
-      const files = data.files || [];
-      setDefaultFiles(files);
-      if (files.length > 0 && !files.includes(selectedDefaultFile)) {
-        setSelectedDefaultFile(files[0]);
-      }
-      if (files.length === 0) {
-        setSelectedDefaultFile("");
-      }
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "加载文件列表失败";
-      setError(msg);
-    }
-  }
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          turns?: { user: string; assistant: string; ts: string }[];
+        };
+        const turns = data.turns ?? [];
+        if (!turns.length) return;
+        const mapped: Message[] = turns.flatMap((t, i) => [
+          {
+            id: `hist-u-${i}`,
+            role: "user" as const,
+            content: t.user,
+            ts: t.ts,
+          },
+          {
+            id: `hist-a-${i}`,
+            role: "assistant" as const,
+            content: t.assistant,
+            ts: t.ts,
+          },
+        ]);
+        setMessages(mapped);
+      } catch { /* ignore */ }
+    },
+    []
+  );
 
   useEffect(() => {
-    if (mode === "clean") {
-      void loadDefaultFiles(inputDir);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode]);
+    if (sessionId) void loadHistory(sessionId);
+  }, [sessionId, loadHistory]);
 
   useEffect(() => {
-    if (mode !== "clean" || !selectedDefaultFile) {
-      setSelectedDefaultFileContent("");
-      return;
-    }
-    void (async () => {
-      try {
-        const res = await fetch(
-          `/api/cleaning/files?dir=${encodeURIComponent(inputDir)}&file=${encodeURIComponent(selectedDefaultFile)}`
-        );
-        if (!res.ok) {
-          setSelectedDefaultFileContent("");
-          return;
-        }
-        const data = (await res.json()) as { content?: string };
-        setSelectedDefaultFileContent(data.content || "");
-      } catch {
-        setSelectedDefaultFileContent("");
-      }
-    })();
-  }, [mode, inputDir, selectedDefaultFile]);
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, streamingId]);
 
-  const disableSend = useMemo(() => {
-    if (!sessionId || loading) return true;
-    if (history.length >= TURN_LIMIT) return true;
-    if (mode === "clean") return false;
-    if (mode === "dev_pipeline") return !text.trim();
-    return !text.trim();
-  }, [loading, mode, sessionId, text, history.length]);
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "0px";
+    el.style.height = `${Math.min(el.scrollHeight, 192)}px`;
+  }, [text]);
 
-  function composePayloadText(): string {
-    if (mode === "dev_pipeline") return text.trim();
-    if (mode !== "clean") return text.trim();
-
-    const baseTask = text.trim() || "请执行日志清洗任务";
-    const lines: string[] = [
-      "[清洗模式请求]",
-      "请优先执行日志清洗与归档流水线（关键词：sft/jsonl/logs/archive/system instruction）。",
-      `任务描述：${baseTask}`,
-      `默认 input 目录：${inputDir}`,
-    ];
-
-    if (selectedDefaultFile) {
-      lines.push(`默认目录选中文件：${selectedDefaultFile}`);
-      if (selectedDefaultFileContent) {
-        lines.push(`默认目录文件内容（节选）：\n${selectedDefaultFileContent.slice(0, 3000)}`);
-      }
-    }
-    if (customFileName) {
-      lines.push(`自定义文件：${customFileName}`);
-      if (customFileContent) {
-        lines.push(`自定义文件内容（节选）：\n${customFileContent.slice(0, 3000)}`);
-      }
-    }
-
-    if (systemMode === "manual" && manualSystemInstruction.trim()) {
-      lines.push(`system instruction（手动输入）：\n${manualSystemInstruction.trim().slice(0, 1500)}`);
-    }
-    if (systemMode === "file" && systemFileName) {
-      lines.push(`system instruction 文件：${systemFileName}`);
-      if (systemFileContent.trim()) {
-        lines.push(`system instruction 文件内容：\n${systemFileContent.trim().slice(0, 1500)}`);
-      }
-    }
-
-    lines.push("请给出执行结果与下一步建议。");
-    return lines.join("\n");
-  }
+  useEffect(() => {
+    if (!loading) textareaRef.current?.focus();
+  }, [loading, mode]);
 
   async function onSend() {
-    if (history.length >= TURN_LIMIT) {
-      return;
-    }
+    const trimmed = text.trim();
+    if (!trimmed || !sessionId || loading) return;
+
     setLoading(true);
     setError("");
-    setReply("");
-    setActiveAgent("");
-    setTraceId("");
-    setTraceSteps([]);
+    setText("");
+
+    const userMsgId = crypto.randomUUID();
+    const assistantMsgId = crypto.randomUUID();
+    const now = new Date().toISOString();
+
+    setMessages((prev) => [
+      ...prev,
+      { id: userMsgId, role: "user", content: trimmed, ts: now },
+      { id: assistantMsgId, role: "assistant", content: "", ts: now },
+    ]);
+    setStreamingId(assistantMsgId);
 
     const controller = new AbortController();
     abortRef.current = controller;
 
     try {
-      const outboundTraceId =
-        typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : "";
-      const workflow_mode = mode === "dev_pipeline" ? "dev_pipeline" : "default";
+      const outboundTraceId = crypto.randomUUID?.() ?? "";
       const res = await fetch("/api/chat/stream", {
         method: "POST",
         headers: {
@@ -296,87 +280,101 @@ export default function Home() {
           "x-session-id": sessionId,
           ...(outboundTraceId ? { "x-trace-id": outboundTraceId } : {}),
         },
-        body: JSON.stringify({
-          text: composePayloadText().slice(0, 12000),
-          workflow_mode,
-        }),
+        body: JSON.stringify({ text: trimmed.slice(0, 12000), mode }),
         signal: controller.signal,
       });
 
       if (!res.ok) {
-        const ct = res.headers.get("content-type") || "";
+        const ct = res.headers.get("content-type") ?? "";
         if (ct.includes("application/json")) {
           const j = (await res.json().catch(() => null)) as { detail?: string } | null;
-          throw new Error(j?.detail || `HTTP ${res.status}`);
+          throw new Error(j?.detail ?? `HTTP ${res.status}`);
         }
         throw new Error(`HTTP ${res.status}`);
       }
-      if (!res.body) {
-        throw new Error("响应无正文（后端可能未返回流）");
-      }
+      if (!res.body) throw new Error("响应无正文");
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder("utf-8");
       let buf = "";
+      let collectedTraceId = "";
+      let collectedTrace: TraceStepRow[] = [];
 
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
-
         buf += decoder.decode(value, { stream: true });
-
-        // SSE 事件块以空行分隔：\n\n
         const parts = buf.split("\n\n");
-        buf = parts.pop() || "";
-
+        buf = parts.pop() ?? "";
         for (const part of parts) {
           const line = part.trim();
           if (!line.startsWith("data:")) continue;
-          const jsonStr = line.slice(5).trim();
-          const parsed = safeParseJson(jsonStr);
+          const parsed = safeParseJson(line.slice(5).trim());
           if (!parsed || typeof parsed !== "object") continue;
-          const msg = parsed as SSEMsg;
-          if (isChatMeta(parsed)) {
-            const wf = parsed.workflow_mode;
-            if (wf === "dev_pipeline") setActiveAgent("AI 软件工程流水线");
-            else setActiveAgent(agentName(parsed.intent?.task_type));
-            if (parsed.trace_id) setTraceId(parsed.trace_id);
-            if (parsed.trace && Array.isArray(parsed.trace)) setTraceSteps(parsed.trace);
+          const msg = parsed as Record<string, unknown>;
+
+          if ("session_id" in msg && "intent" in msg) {
+            if (msg.trace_id) collectedTraceId = String(msg.trace_id);
+            if (msg.trace && Array.isArray(msg.trace))
+              collectedTrace = msg.trace as TraceStepRow[];
             continue;
           }
-          if ("type" in msg && msg.type === "delta") {
-            setReply((prev) => prev + msg.content);
-            continue;
-          }
-          if ("type" in msg && msg.type === "done") {
-            continue;
+          if (msg.type === "delta") {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantMsgId
+                  ? { ...m, content: m.content + (msg.content as string) }
+                  : m
+              )
+            );
           }
         }
       }
-      // 简单刷新一次历史记录（不追求强一致，够演示即可）
-      try {
-        const res = await fetch("/api/chat/history", {
-          method: "GET",
-          headers: {
-            "x-session-id": sessionId,
-          },
-        });
-        if (res.ok) {
-          const data = (await res.json()) as { turns?: ChatTurn[] };
-          const turns = data.turns || [];
-          setHistory(turns);
-          setActiveTurnIdx(turns.length > 0 ? turns.length - 1 : -1);
-        }
-      } catch {
-        // ignore
-      }
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantMsgId
+            ? {
+                ...m,
+                traceId: collectedTraceId || undefined,
+                traceSteps: collectedTrace.length ? collectedTrace : undefined,
+              }
+            : m
+        )
+      );
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "请求失败";
-      setError(msg);
+      if (e instanceof DOMException && e.name === "AbortError") {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantMsgId && !m.content
+              ? { ...m, content: "（已停止生成）" }
+              : m
+          )
+        );
+      } else {
+        const rawMsg = e instanceof Error ? e.message : "请求失败";
+        const hint = rawMsg.includes("无法连接") || rawMsg.includes("fetch") || rawMsg.includes("503")
+          ? `请求失败：后端服务不可用。请双击项目根目录的 start_dev.bat 启动全部服务。\n\n原始错误：${rawMsg}`
+          : `请求失败：${rawMsg}`;
+        setError(hint);
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantMsgId
+              ? { ...m, content: `❌ ${hint}` }
+              : m
+          )
+        );
+      }
     } finally {
+      setStreamingId(null);
       setLoading(false);
       abortRef.current = null;
     }
+  }
+
+  function onSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    void onSend();
   }
 
   function onStop() {
@@ -385,429 +383,329 @@ export default function Home() {
     setLoading(false);
   }
 
+  function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (
+      shouldSendOnEnter({
+        key: e.key,
+        shiftKey: e.shiftKey,
+        isComposing: isComposing || e.nativeEvent.isComposing,
+        keyCode: "keyCode" in e.nativeEvent ? e.nativeEvent.keyCode : undefined,
+      })
+    ) {
+      e.preventDefault();
+      void onSend();
+    }
+  }
+
   async function onExport() {
     if (!sessionId || exporting) return;
     setExporting(true);
-    setExportMessage("");
-    setError("");
     try {
       const res = await fetch("/api/chat/export", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-session-id": sessionId,
-        },
-        body: JSON.stringify({}),
+        headers: { "x-session-id": sessionId },
       });
-      const data = (await res.json()) as { file_path?: string; detail?: string };
-      if (!res.ok) {
-        throw new Error(data?.detail || `导出失败: HTTP ${res.status}`);
-      }
-      if (data.file_path) {
-        setExportMessage(`已导出到 ${data.file_path}`);
-      } else {
-        setExportMessage("导出成功。");
-      }
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "导出失败";
-      setError(msg);
+      if (!res.ok) throw new Error(`导出失败 HTTP ${res.status}`);
+      const data: unknown = await res.json();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `specforge-export-${new Date().toISOString().slice(0, 16).replace(/[T:]/g, "-")}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "导出失败");
     } finally {
       setExporting(false);
     }
   }
 
+  const isEmpty = messages.length === 0 && !loading;
+  const readyToSend = canSendMessage(text, sessionId, loading || isComposing);
+  const statusLabel = loading
+    ? "生成中"
+    : stackOk === false
+    ? "后端未连接"
+    : "会话已就绪";
+  const promptSuggestions =
+    mode === "spec"
+      ? [
+          "帮我拆解一个新功能的需求、范围和验收标准",
+          "把一个模糊想法整理成 Sprint 计划和交付清单",
+        ]
+      : [
+          "帮我审查这段代码的结构问题和潜在风险",
+          "把现有实现反向整理成需求、测试点和重构路线",
+        ];
+
   return (
-    <main className="min-h-screen flex items-start justify-center bg-zinc-50 dark:bg-black px-4 pt-[6vh] pb-6">
-      <div className="w-[min(94vw,1360px)] min-h-[70vh] grid grid-cols-1 lg:grid-cols-[1.618fr,1fr] gap-4">
-        <section className="bg-white dark:bg-black rounded-2xl border border-zinc-200 dark:border-zinc-800 p-6 shadow-sm flex flex-col">
-          <div className="flex items-center justify-between mb-3">
+    <div className="flex min-h-screen flex-col text-zinc-900">
+      {/* Top bar */}
+      <header className="sticky top-0 z-20 flex-none border-b border-[color:var(--line)] bg-[color:var(--surface)]/95 px-5 py-4 backdrop-blur-xl">
+        <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#d9925a_0%,#8f3d1d_100%)] text-sm font-semibold text-white shadow-[0_10px_30px_rgba(143,61,29,0.22)]">
+              SF
+            </div>
             <div>
-              <div className="text-lg font-semibold">Axiodrasil 演示（流式输出 + 路由分区）</div>
-              <div className="text-sm text-zinc-500 dark:text-zinc-400">
-                当前路由：<b>{activeAgent || "—"}</b>
+              <div className="font-semibold tracking-[0.18em] text-zinc-900 uppercase text-[11px]">
+                SpecForge
               </div>
-            </div>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                className="px-3 py-2 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                onClick={() => {
-                  const id = crypto.randomUUID();
-                  try {
-                    window.localStorage.setItem("x-session-id", id);
-                  } catch {
-                    /* 隐私模式等无法写 localStorage 时仍允许新会话 */
-                  }
-                  setSessionId(id);
-                  setText("");
-                  setReply("");
-                  setHistory([]);
-                  setActiveTurnIdx(-1);
-                  setError("");
-                  setExportMessage("");
-                }}
-              >
-                新建对话
-              </button>
-              <button
-                type="button"
-                className="px-3 py-2 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                onClick={onExport}
-                disabled={exporting || !sessionId}
-              >
-                {exporting ? "导出中..." : "导出会话"}
-              </button>
+              <div className="text-sm text-zinc-500">
+                把想法和代码整理成更可执行的工程规格
+              </div>
             </div>
           </div>
 
-          {history.length >= TURN_LIMIT ? (
-            <div className="mb-2 text-xs text-amber-700 dark:text-amber-400">
-              本对话已达到 {TURN_LIMIT} 轮上限，请点击「新建对话」开始新的会话。
-            </div>
-          ) : null}
-
-          {stackOk === false ? (
-            <div className="mb-3 rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/40 px-3 py-2 text-sm text-red-800 dark:text-red-200">
-              <div className="font-medium">后端链路异常（Next → FastAPI）</div>
-              <div className="mt-1 text-xs opacity-90">{stackHint}</div>
-              <div className="mt-2 text-xs text-red-700 dark:text-red-300">
-                建议：以管理员打开 CMD/PowerShell，对仍占用 6379 的进程执行{" "}
-                <code className="rounded bg-red-100 dark:bg-red-900/50 px-1">taskkill /F /PID {"<PID>"}</code>，或在{" "}
-                <code className="rounded bg-red-100 dark:bg-red-900/50 px-1">services.msc</code>{" "}
-                中停止 Redis 服务；然后{" "}
-                <code className="rounded bg-red-100 dark:bg-red-900/50 px-1">
-                  .\scripts\dev_stack.ps1 -Action restart -All -ForceKillPort
-                </code>
-                。修改过后端 Python 后需重启 backend。
-              </div>
-            </div>
-          ) : null}
-          {stackOk === true && stackHint ? (
-            <div className="mb-3 rounded-lg border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/40 px-3 py-2 text-xs text-amber-900 dark:text-amber-200">
-              {stackHint}
-            </div>
-          ) : null}
-
-          <div className="mb-3 flex flex-wrap gap-2">
-            <button
-              type="button"
-              className={`px-3 py-1.5 rounded-lg text-sm border disabled:opacity-50 disabled:cursor-not-allowed ${
-                mode === "chat"
-                  ? "bg-black text-white border-black dark:bg-white dark:text-black dark:border-white"
-                  : "bg-transparent border-zinc-300 dark:border-zinc-700"
-              }`}
-              onClick={() => setMode("chat")}
-              disabled={loading}
-            >
-              教学测试
-            </button>
-            <button
-              type="button"
-              className={`px-3 py-1.5 rounded-lg text-sm border disabled:opacity-50 disabled:cursor-not-allowed ${
-                mode === "dev_pipeline"
-                  ? "bg-black text-white border-black dark:bg-white dark:text-black dark:border-white"
-                  : "bg-transparent border-zinc-300 dark:border-zinc-700"
-              }`}
-              onClick={() => setMode("dev_pipeline")}
-              disabled={loading}
-            >
-              AI 软件工程
-            </button>
-            <button
-              type="button"
-              className={`px-3 py-1.5 rounded-lg text-sm border disabled:opacity-50 disabled:cursor-not-allowed ${
-                mode === "clean"
-                  ? "bg-black text-white border-black dark:bg-white dark:text-black dark:border-white"
-                  : "bg-transparent border-zinc-300 dark:border-zinc-700"
-              }`}
-              onClick={() => setMode("clean")}
-              disabled={loading}
-            >
-              清洗模式
-            </button>
-          </div>
-
-          {mode === "dev_pipeline" ? (
-            <div className="mb-2 text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
-              对标教材里的需求、迭代、DoD、回顾等实践，用 AI 做多步结构化交付：用户故事与 Sprint 目标 → 有序待办与架构
-              → 实现草案 → 测试 / 完成定义 / CHANGELOG / CI 提示 / 短回顾。后几步只携带上一步 JSON 摘要，控制 Token。
-              若输入包含「游戏客户端工具 / Unity / Unreal / 资源管线」关键词，会自动启用岗位画像增强输出。
-            </div>
-          ) : null}
-
-          <div className="flex gap-2">
-            {mode === "clean" ? (
-              <input
-                className="flex-1 border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2 bg-transparent text-sm"
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                placeholder="清洗模式简短任务描述（可选）"
-                maxLength={1000}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) onSend();
-                }}
-                disabled={loading}
+          <div className="flex items-center gap-3">
+            <div className="hidden items-center gap-2 rounded-full border border-[color:var(--line)] bg-white/70 px-3 py-1.5 text-xs text-zinc-500 sm:flex">
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  loading
+                    ? "bg-sky-500 animate-pulse"
+                    : stackOk === false
+                    ? "bg-red-500"
+                    : "bg-emerald-500"
+                }`}
               />
-            ) : (
+              <span>{statusLabel}</span>
+            </div>
+
+            <div className="flex overflow-hidden rounded-xl border border-[color:var(--line)] bg-white/80 text-xs shadow-sm">
+              <button
+                type="button"
+                onClick={() => setMode("spec")}
+                disabled={loading}
+                className={`px-3 py-2 transition-colors ${
+                  mode === "spec"
+                    ? "bg-zinc-900 text-white"
+                    : "bg-white/40 text-zinc-500 hover:bg-zinc-50"
+                }`}
+              >
+                Spec
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode("review")}
+                disabled={loading}
+                className={`border-l border-[color:var(--line)] px-3 py-2 transition-colors ${
+                  mode === "review"
+                    ? "bg-zinc-900 text-white"
+                    : "bg-white/40 text-zinc-500 hover:bg-zinc-50"
+                }`}
+              >
+                Review
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => void onExport()}
+              disabled={exporting || messages.length === 0}
+              className="rounded-full border border-[color:var(--line)] bg-white/80 px-3 py-2 text-xs text-zinc-500 shadow-sm transition-colors hover:text-zinc-800 disabled:opacity-30"
+            >
+              {exporting ? "导出中…" : "导出"}
+            </button>
+
+            <button
+              type="button"
+              onClick={newSession}
+              disabled={loading}
+              className="rounded-full border border-[color:var(--line)] bg-zinc-900 px-3 py-2 text-xs text-white shadow-sm transition-colors hover:bg-zinc-800 disabled:opacity-30"
+            >
+              新对话
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Hint banner */}
+      {(stackOk === false || stackHint) && (
+        <div
+          className={`mx-auto mt-4 w-[calc(100%-2rem)] max-w-6xl flex-none rounded-2xl px-4 py-3 text-xs shadow-sm ${
+            stackOk === false
+              ? "bg-red-50 border border-red-200 text-red-700"
+              : "bg-amber-50 border border-amber-200 text-amber-700"
+          }`}
+        >
+          {stackOk === false ? (
+            <>
+              <span className="font-medium">后端链路异常</span>
+              {stackHint && <span className="ml-1.5 opacity-80">{stackHint}</span>}
+            </>
+          ) : (
+            stackHint
+          )}
+        </div>
+      )}
+
+      {/* Messages area */}
+      <main className="flex-1 overflow-y-auto">
+        {isEmpty ? (
+          <div className="mx-auto flex w-full max-w-6xl items-start px-4 pt-6 pb-2">
+            <div className="grid w-full gap-4 lg:grid-cols-[1.25fr_0.75fr]">
+              <section className="rounded-[2rem] border border-white/60 bg-[color:var(--surface)] p-6 shadow-[0_24px_70px_rgba(98,65,39,0.12)] backdrop-blur-xl">
+                <div className="inline-flex rounded-full border border-[rgba(201,111,59,0.18)] bg-[rgba(201,111,59,0.08)] px-3 py-1 text-[11px] font-medium uppercase tracking-[0.18em] text-[color:var(--accent-strong)]">
+                  {mode === "spec" ? "Product Spec Studio" : "Reverse Review Desk"}
+                </div>
+                <h1 className="mt-3 max-w-2xl text-2xl font-semibold tracking-tight text-zinc-900 sm:text-3xl">
+                  {mode === "spec" ? "把模糊需求整理成可执行规格" : "把现有代码还原成清晰决策"}
+                </h1>
+                <p className="mt-2 max-w-xl text-sm leading-6 text-zinc-600">
+                  {mode === "spec"
+                    ? "从目标、范围、验收标准到 Sprint 计划，一次把需求讲清楚。"
+                    : "从实现细节、结构风险到重构建议，快速看出问题和下一步。"}
+                </p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {promptSuggestions.map((prompt) => (
+                    <button
+                      key={prompt}
+                      type="button"
+                      onClick={() => {
+                        setText(prompt);
+                        textareaRef.current?.focus();
+                      }}
+                      className="rounded-2xl border border-[color:var(--line)] bg-white/80 px-4 py-3 text-left text-sm text-zinc-600 shadow-sm transition-transform hover:-translate-y-0.5 hover:text-zinc-900"
+                    >
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              <aside className="rounded-[2rem] border border-white/60 bg-[color:var(--surface)] p-5 shadow-[0_24px_70px_rgba(98,65,39,0.1)] backdrop-blur-xl">
+                <div className="text-xs font-medium uppercase tracking-[0.18em] text-zinc-500">
+                  当前工作流
+                </div>
+                <div className="mt-3 space-y-3">
+                  <div className="rounded-2xl bg-white/80 p-4 shadow-sm">
+                    <div className="text-sm font-medium text-zinc-900">输入方式</div>
+                    <p className="mt-2 text-sm leading-6 text-zinc-600">
+                      {mode === "spec"
+                        ? "自然语言描述目标、约束和你希望交付的结果。"
+                        : "贴入代码片段或模块说明，系统会反向整理结构与风险。"}
+                    </p>
+                  </div>
+                  <div className="rounded-2xl bg-white/80 p-4 shadow-sm">
+                    <div className="text-sm font-medium text-zinc-900">发送规则</div>
+                    <p className="mt-2 text-sm leading-6 text-zinc-600">
+                      `Enter` 发送，`Shift+Enter` 换行。中文输入法确认候选词时不会误触发送。
+                    </p>
+                  </div>
+                  <div className="rounded-2xl bg-white/80 p-4 shadow-sm">
+                    <div className="text-sm font-medium text-zinc-900">当前状态</div>
+                    <p className="mt-2 text-sm leading-6 text-zinc-600">
+                      {stackOk === false
+                        ? "后端未连接，当前无法发起请求。"
+                        : "前端已准备好接收输入并开始新会话。"}
+                    </p>
+                  </div>
+                </div>
+              </aside>
+            </div>
+          </div>
+        ) : (
+          <div className="mx-auto flex max-w-4xl flex-col gap-5 px-4 py-8">
+            {messages.map((msg) =>
+              msg.role === "user" ? (
+                <UserBubble key={msg.id} msg={msg} />
+              ) : (
+                <AssistantBubble
+                  key={msg.id}
+                  msg={msg}
+                  isStreaming={streamingId === msg.id}
+                  elapsed={elapsed}
+                />
+              )
+            )}
+            {error && (
+              <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {error}
+              </div>
+            )}
+            <div ref={bottomRef} />
+          </div>
+        )}
+      </main>
+
+      {/* Composer */}
+      <footer className="sticky bottom-0 flex-none border-t border-[color:var(--line)] bg-[color:var(--surface)]/95 px-4 py-4 backdrop-blur-xl">
+        <form className="mx-auto w-full max-w-4xl" onSubmit={onSubmit}>
+          <div className="rounded-[2rem] border border-white/70 bg-[color:var(--surface-strong)] px-4 py-4 shadow-[0_18px_50px_rgba(91,63,42,0.12)]">
+            <div className="flex items-center justify-between gap-3 px-1 pb-3">
+              <div className="text-xs text-zinc-500">
+                {mode === "spec" ? "需求规格输入区" : "代码审查输入区"}
+              </div>
+              <div className="flex items-center gap-3 text-[11px] text-zinc-400">
+                <span>{isComposing ? "输入法确认中…" : "Enter 发送"}</span>
+                <span>{text.length > 0 ? `${text.length}/12k` : "最多 12k"}</span>
+              </div>
+            </div>
+
+            <div className="flex items-end gap-3 rounded-[1.5rem] border border-[color:var(--line)] bg-white px-4 py-3 transition-colors focus-within:border-[rgba(201,111,59,0.45)]">
               <textarea
-                className="flex-1 border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2 bg-transparent text-sm min-h-[100px] resize-y"
+                ref={textareaRef}
                 value={text}
                 onChange={(e) => setText(e.target.value)}
+                onKeyDown={onKeyDown}
+                onCompositionStart={() => setIsComposing(true)}
+                onCompositionEnd={() => setIsComposing(false)}
+                disabled={loading}
+                rows={1}
                 placeholder={
-                  mode === "dev_pipeline"
-                    ? "描述要做的功能/服务/脚本（目标用户、输入输出、约束、技术栈、验收期望）；越具体越接近「书上那一套」交付物"
-                    : "输入：需求分析/文档整理/代码实现/方案评审（例如：把 README 变成阅读路线）"
+                  mode === "spec"
+                    ? "描述你的想法、范围、约束或期望交付物…"
+                    : "粘贴待审查代码、模块说明或你想聚焦的问题…"
                 }
                 maxLength={12000}
-                disabled={loading}
+                className="min-h-[56px] flex-1 resize-none bg-transparent py-1 text-sm leading-7 text-zinc-900 placeholder-zinc-400 focus:outline-none max-h-48"
+                style={{ overflowY: "auto" }}
               />
-            )}
-            {!loading ? (
-              <button
-                type="button"
-                className="px-4 py-2 rounded-lg bg-black dark:bg-white text-white dark:text-black text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                onClick={onSend}
-                disabled={disableSend}
-                title={
-                  !sessionId
-                    ? "正在初始化会话…"
-                    : history.length >= TURN_LIMIT
-                      ? "已达轮次上限，请新建对话"
-                      : (mode === "chat" || mode === "dev_pipeline") && !text.trim()
-                        ? "请先输入内容"
-                        : undefined
-                }
-              >
-                发送
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="px-4 py-2 rounded-lg bg-red-600 text-white text-sm"
-                onClick={onStop}
-              >
-                停止
-              </button>
-            )}
-          </div>
-
-          {mode === "clean" ? (
-            <div className="mt-3 grid grid-cols-1 xl:grid-cols-2 gap-3">
-              <div className="border border-zinc-200 dark:border-zinc-800 rounded-lg p-3">
-                <div className="text-sm font-medium mb-2">输入文件选择</div>
-                <div className="text-xs text-zinc-500 mb-2">默认目录（input）文件下拉 + 自定义文件入口</div>
-                <label className="text-xs text-zinc-500">默认目录</label>
-                <div className="flex gap-2 mt-1 mb-2">
-                  <input
-                    className="flex-1 border border-zinc-200 dark:border-zinc-800 rounded-lg px-2 py-1.5 bg-transparent text-sm"
-                    value={inputDir}
-                    onChange={(e) => setInputDir(e.target.value)}
-                    disabled={loading}
-                  />
+              <div className="flex items-center gap-2 pb-1">
+                {loading ? (
                   <button
                     type="button"
-                    className="px-2 py-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-xs disabled:opacity-50 disabled:cursor-not-allowed"
-                    onClick={() => void loadDefaultFiles(inputDir)}
-                    disabled={loading}
+                    onClick={onStop}
+                    className="flex h-11 w-11 items-center justify-center rounded-2xl bg-zinc-900 text-white transition-colors hover:bg-zinc-700"
+                    aria-label="停止生成"
                   >
-                    刷新
+                    <svg width="13" height="13" viewBox="0 0 12 12" fill="currentColor">
+                      <rect x="2" y="2" width="8" height="8" rx="1.2" />
+                    </svg>
                   </button>
-                </div>
-                <select
-                  className="w-full border border-zinc-200 dark:border-zinc-800 rounded-lg px-2 py-1.5 bg-transparent text-sm mb-2"
-                  value={selectedDefaultFile}
-                  onChange={(e) => setSelectedDefaultFile(e.target.value)}
-                  disabled={loading || defaultFiles.length === 0}
-                >
-                  {defaultFiles.length === 0 ? (
-                    <option value="">暂无可选文件</option>
-                  ) : (
-                    defaultFiles.map((f) => (
-                      <option key={f} value={f}>
-                        {f}
-                      </option>
-                    ))
-                  )}
-                </select>
-                <label className="text-xs text-zinc-500">自定义文件（本地）</label>
-                <input
-                  className="mt-1 block w-full text-sm"
-                  type="file"
-                  disabled={loading}
-                  onChange={async (e) => {
-                    const file = e.target.files?.[0];
-                    if (!file) return;
-                    setCustomFileName(file.name);
-                    const content = await file.text();
-                    setCustomFileContent(content);
-                  }}
-                />
-              </div>
-
-              <div className="border border-zinc-200 dark:border-zinc-800 rounded-lg p-3">
-                <div className="text-sm font-medium mb-2">System Instruction 注入</div>
-                <div className="text-xs text-zinc-500 mb-2">二选一，避免手写与文件提示冲突</div>
-                <div className="flex gap-3 mb-2 text-sm">
-                  <label className="flex items-center gap-1">
-                    <input
-                      type="radio"
-                      checked={systemMode === "manual"}
-                      onChange={() => setSystemMode("manual")}
-                      disabled={loading}
-                    />
-                    手动输入
-                  </label>
-                  <label className="flex items-center gap-1">
-                    <input
-                      type="radio"
-                      checked={systemMode === "file"}
-                      onChange={() => setSystemMode("file")}
-                      disabled={loading}
-                    />
-                    文件挂载
-                  </label>
-                </div>
-                {systemMode === "manual" ? (
-                  <textarea
-                    className="w-full border border-zinc-200 dark:border-zinc-800 rounded-lg px-2 py-2 bg-transparent text-sm min-h-[100px]"
-                    value={manualSystemInstruction}
-                    onChange={(e) => setManualSystemInstruction(e.target.value)}
-                    placeholder="输入 system instruction（例如：清洗规则、格式要求）"
-                    disabled={loading}
-                  />
                 ) : (
-                  <div>
-                    <input
-                      className="block w-full text-sm mb-2"
-                      type="file"
-                      disabled={loading}
-                      onChange={async (e) => {
-                        const file = e.target.files?.[0];
-                        if (!file) return;
-                        setSystemFileName(file.name);
-                        const content = await file.text();
-                        setSystemFileContent(content);
-                      }}
-                    />
-                    <div className="text-xs text-zinc-500 truncate">
-                      {systemFileName ? `已加载：${systemFileName}` : "尚未加载提示词文件"}
-                    </div>
-                  </div>
+                  <button
+                    type="submit"
+                    disabled={!readyToSend}
+                    className="flex h-11 min-w-11 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#d9925a_0%,#8f3d1d_100%)] px-3 text-white shadow-[0_14px_30px_rgba(143,61,29,0.28)] transition-all hover:-translate-y-0.5 disabled:translate-y-0 disabled:opacity-30"
+                    aria-label="发送"
+                  >
+                    <svg
+                      width="15"
+                      height="15"
+                      viewBox="0 0 14 14"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <line x1="7" y1="12" x2="7" y2="2" />
+                      <polyline points="3,6 7,2 11,6" />
+                    </svg>
+                  </button>
                 )}
               </div>
             </div>
-          ) : null}
 
-          {error ? <div className="mt-3 text-sm text-red-600 dark:text-red-400">{error}</div> : null}
-          {exportMessage && !error ? (
-            <div className="mt-2 text-xs text-emerald-700 dark:text-emerald-400">{exportMessage}</div>
-          ) : null}
-
-          <div className="mt-4">
-            <div className="text-sm text-zinc-500 dark:text-zinc-400 mb-2">模型输出</div>
-            <pre className="whitespace-pre-wrap bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg p-3 text-sm min-h-[120px]">
-              {reply || (loading ? "正在生成..." : "等待输入")}
-            </pre>
-            {traceSteps.length > 0 ? (
-              <details className="mt-3 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50/80 dark:bg-zinc-950/40 px-3 py-2 text-xs">
-                <summary className="cursor-pointer font-medium text-zinc-700 dark:text-zinc-200">
-                  全链路追踪（{traceSteps.length} 步）
-                  {traceId ? (
-                    <span className="ml-2 font-mono text-zinc-500 dark:text-zinc-400">
-                      {traceId.slice(0, 8)}…
-                    </span>
-                  ) : null}
-                </summary>
-                <ol className="mt-2 space-y-2 list-decimal pl-4 text-zinc-600 dark:text-zinc-300">
-                  {traceSteps.map((s) => (
-                    <li key={`${s.index}-${s.node}`} className="break-words">
-                      <span className="font-mono text-zinc-800 dark:text-zinc-100">{s.node}</span>
-                      <span className="text-zinc-400 dark:text-zinc-500"> · {s.duration_ms} ms</span>
-                      {s.keys_written.length > 0 ? (
-                        <div className="text-zinc-500 dark:text-zinc-400 mt-0.5">
-                          keys: {s.keys_written.join(", ")}
-                        </div>
-                      ) : null}
-                      <pre className="mt-1 whitespace-pre-wrap break-words text-[11px] bg-white/60 dark:bg-black/30 rounded p-2 border border-zinc-100 dark:border-zinc-800 max-h-40 overflow-y-auto">
-                        {JSON.stringify(s.summary, null, 2)}
-                      </pre>
-                    </li>
-                  ))}
-                </ol>
-              </details>
-            ) : null}
-          </div>
-
-          <div className="mt-6 flex-1 min-h-[32vh]">
-            <div className="text-sm text-zinc-500 dark:text-zinc-400 mb-2">对话记录（最近）</div>
-            {history.length === 0 ? (
-              <div className="text-xs text-zinc-400">暂无历史记录。</div>
-            ) : (
-              <div className="space-y-4 max-h-[40vh] overflow-y-auto overflow-x-hidden pr-1">
-                {history.map((turn, idx) => (
-                  <div key={idx} id={`turn-${idx}`} className="space-y-1 scroll-mt-16">
-                    <div className="flex justify-end">
-                      <div className="max-w-[90%] bg-blue-500 text-white text-sm rounded-2xl px-4 py-2.5 whitespace-pre-wrap break-words">
-                        {turn.user || "（空用户输入）"}
-                      </div>
-                    </div>
-                    <div className="flex justify-start">
-                      <div className="max-w-[90%] bg-zinc-100 dark:bg-zinc-900 text-sm rounded-2xl px-4 py-2.5 whitespace-pre-wrap break-words">
-                        {turn.assistant || "（空回复）"}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </section>
-
-        <aside className="bg-white dark:bg-black rounded-2xl border border-zinc-200 dark:border-zinc-800 p-4 shadow-sm h-fit sticky top-6">
-          <div className="text-sm font-medium mb-1">会话导航</div>
-          <div className="text-xs text-zinc-500 mb-3">轮次：{history.length} / {TURN_LIMIT}</div>
-          <button
-            type="button"
-            className="w-full mb-3 px-3 py-2 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-sm"
-            onClick={() => {
-              try {
-                window.localStorage.removeItem("x-session-id");
-              } catch {
-                /* ignore */
-              }
-              window.location.reload();
-            }}
-          >
-            重置 session
-          </button>
-          <div className="text-xs text-zinc-500 mb-2">Prompt 定位</div>
-          {history.length === 0 ? (
-            <div className="text-xs text-zinc-400">暂无可导航的 prompt。</div>
-          ) : (
-            <div className="space-y-1 max-h-[56vh] overflow-y-auto pr-1 text-xs">
-              {history.map((turn, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  className={`w-full text-left px-2 py-1 rounded-md border transition-colors ${
-                    activeTurnIdx === idx
-                      ? "bg-blue-50 dark:bg-zinc-800 border-blue-200 dark:border-zinc-600"
-                      : "border-transparent hover:bg-zinc-100 dark:hover:bg-zinc-900 hover:border-zinc-200 dark:hover:border-zinc-700"
-                  }`}
-                  onClick={() => {
-                    setActiveTurnIdx(idx);
-                    const el = document.getElementById(`turn-${idx}`);
-                    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-                  }}
-                >
-                  <div className="font-medium text-zinc-700 dark:text-zinc-200 truncate">{turn.user || "（空用户输入）"}</div>
-                  <div className="text-zinc-400 dark:text-zinc-500 truncate">{turn.assistant || "（空回复）"}</div>
-                </button>
-              ))}
+            <div className="flex flex-wrap items-center justify-between gap-2 px-1 pt-3 text-[11px] text-zinc-400">
+              <span>Shift+Enter 换行，支持多段输入和长文本粘贴。</span>
+              {!stackOk && stackOk !== null && <span>后端未连接，请确认已启动全部服务。</span>}
             </div>
-          )}
-        </aside>
-      </div>
-    </main>
+          </div>
+        </form>
+      </footer>
+    </div>
   );
 }

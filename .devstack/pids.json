@@ -1,5 +1,5 @@
 ﻿{
     "backend":  6300,
     "redis":  16104,
-    "frontend":  30680
+    "frontend":  23928
 }
