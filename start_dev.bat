@@ -36,7 +36,7 @@ if errorlevel 1 (
 REM --- Start all services ---
 echo.
 echo [2/3] Starting services...
-powershell -ExecutionPolicy Bypass -File "%~dp0scripts\dev_stack.ps1" -Action start -All
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\dev_stack.ps1" -Action start -All
 if errorlevel 1 (
     echo [ERROR] Failed to start services
     pause
@@ -45,7 +45,7 @@ if errorlevel 1 (
 
 REM --- Wait for frontend port and open browser ---
 echo [3/3] Waiting for frontend (port 3000)...
-powershell -ExecutionPolicy Bypass -Command "for ($i=0; $i -lt 20; $i++) { $r = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue; if ($r) { Write-Host 'Port 3000 ready'; exit 0 }; Write-Host ('Waiting... ' + ($i+1)*2 + 's'); Start-Sleep 2 }; Write-Host '[WARN] Timeout, opening anyway'"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\wait_listen.ps1" -Port 3000
 start http://127.0.0.1:3000
 echo Browser opened: http://localhost:3000
 
@@ -53,7 +53,7 @@ echo.
 echo =============================================
 echo   Frontend : http://localhost:3000
 echo   Backend  : http://localhost:8000/docs
-echo   Stop all : powershell .\scripts\dev_stack.ps1 -Action stop -All
+echo   Stop all : powershell -NoProfile -ExecutionPolicy Bypass .\scripts\dev_stack.ps1 -Action stop -All
 echo =============================================
 echo.
 pause
