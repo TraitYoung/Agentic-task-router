@@ -41,6 +41,12 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# 开发堆栈运行状态
+.devstack/
+
+# 导出产物
+output/chats/
+
 # 临时脚本或本地工具（如你不想公开）
 scripts/inspect_q2.py
 scripts/insert_career_nuke.py

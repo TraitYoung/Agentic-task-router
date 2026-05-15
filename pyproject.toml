@@ -1,0 +1,13 @@
+[project]
+name = "axiodrasil-core"
+version = "1.0.0"
+description = "Axiodrasil Core: FastAPI + LangGraph backend with Next.js frontend"
+readme = "README.md"
+requires-python = ">=3.13"
+
+# 依赖仍以根目录 requirements.txt 为准（Docker / 既有流程兼容）。
+dependencies = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["backend"]

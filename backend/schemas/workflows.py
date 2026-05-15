@@ -1,0 +1,213 @@
+"""开发流水线：结构化中间结果（敏捷 / 软件工程取向，下游只喂 JSON 摘要以省 Token）。"""
+
+from typing import List
+
+from pydantic import BaseModel, Field, field_validator
+
+
+class DevTaskSpec(BaseModel):
+    """步骤 1：需求发现 — 对齐用户价值与可验收标准（教材式需求 + 敏捷用户故事）"""
+
+    goal: str = Field(..., max_length=2000)
+    constraints: List[str] = Field(default_factory=list, max_length=8)
+    stack_hint: str = Field(default="", max_length=500)
+    acceptance_criteria: List[str] = Field(default_factory=list, max_length=6)
+    user_stories: List[str] = Field(
+        default_factory=list,
+        max_length=6,
+        description="简短用户故事，建议 As a / I want / so that 或一句话等价物",
+    )
+    mvp_sprint_goal: str = Field(
+        default="",
+        max_length=500,
+        description="本迭代（Sprint）要交付的最小可用增量（MVP slice）",
+    )
+    measurable_outcomes: List[str] = Field(
+        default_factory=list,
+        max_length=5,
+        description="可观察的成功信号或度量（非空话）",
+    )
+
+    @field_validator("constraints")
+    @classmethod
+    def cap_constraints(cls, v: List[str]) -> List[str]:
+        return [str(x)[:400] for x in v[:8]]
+
+    @field_validator("acceptance_criteria")
+    @classmethod
+    def cap_acceptance(cls, v: List[str]) -> List[str]:
+        return [str(x)[:400] for x in v[:6]]
+
+    @field_validator("user_stories")
+    @classmethod
+    def cap_user_stories(cls, v: List[str]) -> List[str]:
+        return [str(x)[:500] for x in v[:6]]
+
+    @field_validator("measurable_outcomes")
+    @classmethod
+    def cap_metrics(cls, v: List[str]) -> List[str]:
+        return [str(x)[:300] for x in v[:5]]
+
+
+class DevOutline(BaseModel):
+    """步骤 2：迭代规划与设计 — 架构要点 + 有序 Sprint 待办（MVP 优先）"""
+
+    modules: List[str] = Field(default_factory=list, max_length=12)
+    data_flow: str = Field(default="", max_length=2000)
+    risks: List[str] = Field(default_factory=list, max_length=6)
+    backlog_mvp_ordered: List[str] = Field(
+        default_factory=list,
+        max_length=10,
+        description="本 Sprint 内按实现顺序排列的待办项（颗粒度到可开发任务）",
+    )
+    backlog_parking_lot: List[str] = Field(
+        default_factory=list,
+        max_length=8,
+        description="延后到后续迭代的条目（Parking lot）",
+    )
+    technical_spikes: List[str] = Field(
+        default_factory=list,
+        max_length=5,
+        description="需先验证未知点的技术探针（Spike）",
+    )
+
+    @field_validator("modules")
+    @classmethod
+    def cap_modules(cls, v: List[str]) -> List[str]:
+        return [str(x)[:200] for x in v[:12]]
+
+    @field_validator("risks")
+    @classmethod
+    def cap_risks(cls, v: List[str]) -> List[str]:
+        return [str(x)[:400] for x in v[:6]]
+
+    @field_validator("backlog_parking_lot")
+    @classmethod
+    def cap_parking(cls, v: List[str]) -> List[str]:
+        return [str(x)[:400] for x in v[:8]]
+
+    @field_validator("technical_spikes")
+    @classmethod
+    def cap_spikes(cls, v: List[str]) -> List[str]:
+        return [str(x)[:400] for x in v[:5]]
+
+    @field_validator("backlog_mvp_ordered")
+    @classmethod
+    def cap_mvp_backlog(cls, v: List[str]) -> List[str]:
+        return [str(x)[:400] for x in v[:10]]
+
+
+class DevCodeSketch(BaseModel):
+    """步骤 3：实现草案（单文件或清晰模块草图）"""
+
+    language: str = Field(default="python", max_length=32)
+    code: str = Field(default="", max_length=6000)
+    notes: str = Field(default="", max_length=1500)
+
+
+class DevTestsChangelog(BaseModel):
+    """步骤 4：测试、DoD、变更记录与短回顾 — 对齐「完成定义」与持续交付"""
+
+    test_cases: List[str] = Field(default_factory=list, max_length=10)
+    changelog_entry: str = Field(default="", max_length=2000)
+    definition_of_done: List[str] = Field(
+        default_factory=list,
+        max_length=8,
+        description="本增量满足哪些条件才算 Done（DoD checklist）",
+    )
+    ci_cd_notes: List[str] = Field(
+        default_factory=list,
+        max_length=6,
+        description="CI/CD、自动化检查、发布注意点（可执行）",
+    )
+    sprint_retrospective_one_liner: str = Field(
+        default="",
+        max_length=500,
+        description="Sprint 回顾：一条改进建议或风险预警",
+    )
+
+    @field_validator("test_cases")
+    @classmethod
+    def cap_tests(cls, v: List[str]) -> List[str]:
+        return [str(x)[:400] for x in v[:10]]
+
+    @field_validator("definition_of_done", "ci_cd_notes")
+    @classmethod
+    def cap_dod_ci(cls, v: List[str]) -> List[str]:
+        return [str(x)[:400] for x in v[:8]]
+
+
+class ReverseEngineerSpec(BaseModel):
+    """逆向工程：从现有代码推导需求、测试与改进点"""
+
+    inferred_goal: str = Field(default="", max_length=2000, description="推测的业务目标")
+    inferred_user_stories: List[str] = Field(default_factory=list, max_length=6, description="反向推导的用户故事")
+    missing_tests: List[str] = Field(default_factory=list, max_length=10, description="缺失的测试用例")
+    architecture_issues: List[str] = Field(default_factory=list, max_length=8, description="架构问题")
+    code_quality_issues: List[str] = Field(default_factory=list, max_length=8, description="代码质量问题")
+    improvement_plan: List[str] = Field(default_factory=list, max_length=6, description="改进计划（按优先级）")
+
+    @field_validator("inferred_user_stories")
+    @classmethod
+    def cap_stories(cls, v: List[str]) -> List[str]:
+        return [str(x)[:500] for x in v[:6]]
+
+    @field_validator("missing_tests")
+    @classmethod
+    def cap_tests(cls, v: List[str]) -> List[str]:
+        return [str(x)[:400] for x in v[:10]]
+
+    @field_validator("architecture_issues", "code_quality_issues")
+    @classmethod
+    def cap_issues(cls, v: List[str]) -> List[str]:
+        return [str(x)[:400] for x in v[:8]]
+
+    @field_validator("improvement_plan")
+    @classmethod
+    def cap_improvements(cls, v: List[str]) -> List[str]:
+        return [str(x)[:500] for x in v[:6]]
+
+
+# ── Cursor / AI 编程工具 Prompt 生成 ──
+
+def to_implementation_prompt(spec: DevTaskSpec, outline: DevOutline) -> str:
+    """生成可直接粘贴到 Cursor/Copilot 的实现 prompt。"""
+    stories = "\n".join(f"- {s}" for s in spec.user_stories)
+    backlog = "\n".join(f"{i+1}. {t}" for i, t in enumerate(outline.backlog_mvp_ordered))
+    acceptance = "\n".join(f"- [ ] {ac}" for ac in spec.acceptance_criteria)
+    return (
+        f"## 任务目标\n{spec.goal}\n\n"
+        f"## 用户故事\n{stories}\n\n"
+        f"## 实现任务（按顺序）\n{backlog}\n\n"
+        f"## 验收标准\n{acceptance}\n\n"
+        f"## 约束条件\n" + "\n".join(f"- {c}" for c in spec.constraints) + "\n\n"
+        f"## 技术栈提示\n{spec.stack_hint or '请根据项目类型自行判断'}\n\n"
+        "请逐条实现上述任务，每完成一条标记进度。优先 MVP，延后优化项。"
+    )
+
+
+def to_test_prompt(delivery: DevTestsChangelog) -> str:
+    """生成测试编写 prompt。"""
+    tests = "\n".join(f"- [ ] {t}" for t in delivery.test_cases)
+    dod = "\n".join(f"- [ ] {d}" for d in delivery.definition_of_done)
+    ci = "\n".join(f"- {c}" for c in delivery.ci_cd_notes)
+    return (
+        f"## 测试用例\n{tests}\n\n"
+        f"## 完成定义 (DoD)\n{dod}\n\n"
+        f"## CI/CD 注意事项\n{ci}\n\n"
+        f"## CHANGELOG\n{delivery.changelog_entry}\n\n"
+        "请为上述测试用例编写自动化测试代码，确保所有 DoD 条目可验证。"
+    )
+
+
+def to_review_prompt(spec: ReverseEngineerSpec) -> str:
+    """生成代码审查改进 prompt。"""
+    issues = "\n".join(f"{i+1}. {x}" for i, x in enumerate(spec.architecture_issues + spec.code_quality_issues))
+    improvements = "\n".join(f"{i+1}. {x}" for i, x in enumerate(spec.improvement_plan))
+    return (
+        f"## 审查发现的问题\n{issues}\n\n"
+        f"## 改进计划\n{improvements}\n\n"
+        f"## 参考：推测的需求\n{spec.inferred_goal}\n\n"
+        "请按改进计划逐条重构代码，每完成一条验证对应测试是否通过。"
+    )
+

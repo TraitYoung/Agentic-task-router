@@ -8,7 +8,7 @@ export async function POST(req: NextRequest) {
   const sessionId = req.headers.get("x-session-id") || undefined;
   const traceId = req.headers.get("x-trace-id") || undefined;
 
-  let payload: { text?: string; workflow_mode?: string } = {};
+  let payload: { text?: string; mode?: string } = {};
   try {
     payload = await req.json();
   } catch {
@@ -20,8 +20,8 @@ export async function POST(req: NextRequest) {
   }
 
   const backendBody: Record<string, string> = { text: payload.text };
-  if (payload.workflow_mode && payload.workflow_mode !== "default") {
-    backendBody.workflow_mode = payload.workflow_mode;
+  if (payload.mode) {
+    backendBody.mode = payload.mode;
   }
 
   const backendUrl = `${getBackendBaseUrl()}/api/v1/chat/stream`;
