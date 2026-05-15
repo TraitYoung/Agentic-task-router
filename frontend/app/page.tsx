@@ -139,6 +139,18 @@ export default function Home() {
   const [streamingId, setStreamingId] = useState<string | null>(null);
   const [text, setText] = useState("");
   const [isComposing, setIsComposing] = useState(false);
+  const composingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const safeSetComposing = (v: boolean) => {
+    setIsComposing(v);
+    if (v) {
+      // 安全兜底：5 秒后强制清零，防止 onCompositionEnd 未触发导致按钮永久禁用
+      if (composingTimer.current) clearTimeout(composingTimer.current);
+      composingTimer.current = setTimeout(() => setIsComposing(false), 5000);
+    } else {
+      if (composingTimer.current) { clearTimeout(composingTimer.current); composingTimer.current = null; }
+    }
+  };
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [stackOk, setStackOk] = useState<boolean | null>(null);
@@ -159,7 +171,7 @@ export default function Home() {
     setMessages([]);
     setError("");
     setText("");
-    setIsComposing(false);
+    safeSetComposing(false);
   }
 
   useEffect(() => {
@@ -422,7 +434,7 @@ export default function Home() {
   }
 
   const isEmpty = messages.length === 0 && !loading;
-  const readyToSend = canSendMessage(text, sessionId, loading || isComposing);
+  const readyToSend = canSendMessage(text, sessionId, loading);
   const statusLabel = loading
     ? "生成中"
     : stackOk === false
@@ -649,8 +661,8 @@ export default function Home() {
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 onKeyDown={onKeyDown}
-                onCompositionStart={() => setIsComposing(true)}
-                onCompositionEnd={() => setIsComposing(false)}
+                onCompositionStart={() => safeSetComposing(true)}
+                onCompositionEnd={() => safeSetComposing(false)}
                 disabled={loading}
                 rows={1}
                 placeholder={
