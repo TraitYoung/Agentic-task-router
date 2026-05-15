@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -186,8 +187,9 @@ def run_merge_step(
     sprint: DevOutline,
     sketch: DevCodeSketch,
     delivery: DevTestsChangelog,
+    stream_callback: Callable[[str], None] | None = None,
 ) -> str:
-    """阶段 2：并行后汇总。返回 markdown 片段（面向最终交付展示）。"""
+    """阶段 2: 并行后汇总。有 stream_callback 时逐个 token 推送。"""
     payload = _json_clip(
         {
             "discovery": discovery.model_dump(),
@@ -198,17 +200,26 @@ def run_merge_step(
         MERGE_CFG.max_context_chars,
     )
     step_llm = resolve_step_llm(MERGE_CFG.step_id, llm)
-    rsp = step_llm.invoke(
-        [
-            SystemMessage(
-                content=(
-                    f"你是{MERGE_CFG.role}。请把四份结构化结果整合为“可提交给团队”的发布说明，"
-                    "包含：MVP范围、已覆盖测试、未完成风险、下迭代建议。保持简洁，4-8条要点。"
-                )
-            ),
-            HumanMessage(content=f"上游 JSON：\n{payload}"),
-        ]
-    )
+    messages = [
+        SystemMessage(
+            content=(
+                f"你是{MERGE_CFG.role}。请把四份结构化结果整合为可提交给团队的发布说明，"
+                "包含: MVP范围、已覆盖测试、未完成风险、下迭代建议。保持简洁，4-8条要点。"
+            )
+        ),
+        HumanMessage(content=f"上游 JSON:\n{payload}"),
+    ]
+
+    if stream_callback is not None:
+        full: list[str] = []
+        for chunk in step_llm.stream(messages):
+            token = str(chunk.content) if hasattr(chunk, "content") else str(chunk)
+            if token:
+                stream_callback(token)
+                full.append(token)
+        return "".join(full).strip()
+
+    rsp = step_llm.invoke(messages)
     return str(rsp.content).strip()
 
 

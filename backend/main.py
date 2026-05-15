@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from config.step_model_routing import resolve_step_llm
 from agents.workflow_pipelines import run_dev_pipeline, run_reverse_engineer, synthetic_intent_for_workflow
+from agents.dev_pipeline.orchestrator import run_dev_pipeline_stream, run_reverse_engineer_stream
 from memory.session_cache import SessionCache
 from memory.spec_store import get_spec_store
 from schemas.protocols import TaskIntent
@@ -27,7 +28,7 @@ session_cache = SessionCache(ttl_seconds=3600, window_size=5)
 
 @app.get("/api/v1/health")
 def api_health():
-    """轻量探活：供 Next 开发代理与运维脚本探测；不调用大模型。"""
+    """轻量探活:供 Next 开发代理与运维脚本探测；不调用大模型。"""
     redis_ok = False
     try:
         session_cache.client.ping()
@@ -80,7 +81,7 @@ def _execute_turn(payload: ChatRequest, session_id: str) -> tuple[str, TaskInten
     if payload.mode == "review":
         top_issues = store.get_top_issues(limit=8)
         if top_issues:
-            retrieval_context = "高频问题模式（按频率降序）：\n" + "\n".join(
+            retrieval_context = "高频问题模式（按频率降序）:\n" + "\n".join(
                 f"- [{i['issue_type']}] {i['issue_text']}（出现 {i['frequency']} 次）"
                 for i in top_issues
             )
@@ -94,9 +95,9 @@ def _execute_turn(payload: ChatRequest, session_id: str) -> tuple[str, TaskInten
                 stories = _parse_json_field(s.get("user_stories", "[]"))
                 modules = _parse_json_field(s.get("modules", "[]"))
                 parts.append(
-                    f"• 目标：{s['goal']}\n"
-                    f"  用户故事：{', '.join(stories) if stories else '无'}\n"
-                    f"  模块：{', '.join(modules) if modules else '无'}"
+                    f"• 目标:{s['goal']}\n"
+                    f"  用户故事:{', '.join(stories) if stories else '无'}\n"
+                    f"  模块:{', '.join(modules) if modules else '无'}"
                 )
             retrieval_context = "\n".join(parts)
         llm = resolve_step_llm("discovery", None)
@@ -115,6 +116,96 @@ def _execute_turn(payload: ChatRequest, session_id: str) -> tuple[str, TaskInten
     intent = synthetic_intent_for_workflow(payload.text)
     reply = f"[specforge]: {reply_raw}"
     return reply, intent, trace_raw, payload.mode
+
+
+async def _execute_turn_stream(payload: ChatRequest, session_id: str):
+    """流式执行流水线:通过 asyncio.Queue 推送状态/delta 事件。"""
+    store = get_spec_store()
+    event_queue: asyncio.Queue = asyncio.Queue(maxsize=256)
+
+    retrieval_context = ""
+    if payload.mode == "review":
+        top_issues = store.get_top_issues(limit=8)
+        if top_issues:
+            retrieval_context = "高频问题模式（按频率降序）:\n" + "\n".join(
+                f"- [{i['issue_type']}] {i['issue_text']}（出现 {i['frequency']} 次）"
+                for i in top_issues
+            )
+    else:
+        past_specs = store.search_specs(payload.text, mode="spec", limit=3)
+        if past_specs:
+            parts: list[str] = []
+            for s in past_specs:
+                stories = _parse_json_field(s.get("user_stories", "[]"))
+                modules = _parse_json_field(s.get("modules", "[]"))
+                parts.append(
+                    f"• 目标:{s['goal']}\n"
+                    f"  用户故事:{', '.join(stories) if stories else '无'}\n"
+                    f"  模块:{', '.join(modules) if modules else '无'}"
+                )
+            retrieval_context = "\n".join(parts)
+
+    loop = asyncio.get_running_loop()
+
+    def _run_sync():
+        llm = resolve_step_llm("discovery" if payload.mode != "review" else "reverse_engineer", None)
+        if payload.mode == "review":
+            return run_reverse_engineer_stream(
+                payload.text, llm, retrieval_context=retrieval_context, event_queue=event_queue
+            )
+        else:
+            return run_dev_pipeline_stream(
+                payload.text, llm, retrieval_context=retrieval_context, event_queue=event_queue
+            )
+
+    future = loop.run_in_executor(None, _run_sync)
+
+    # 从 queue 读取事件并 yield，直到 executor 完成
+    while True:
+        try:
+            event = await asyncio.wait_for(event_queue.get(), timeout=0.1)
+            yield event
+        except asyncio.TimeoutError:
+            if future.done():
+                while not event_queue.empty():
+                    try:
+                        yield event_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                break
+
+    reply_raw, trace_raw = future.result()
+
+    # 保存到知识库 + Redis
+    profile = _extract_profile(trace_raw)
+    try:
+        if payload.mode == "review":
+            _save_review_issues(store, trace_raw, profile)
+        else:
+            _save_spec_result(store, trace_raw, payload.text, profile)
+    except Exception:
+        pass
+
+    try:
+        intent = synthetic_intent_for_workflow(payload.text)
+        reply = f"[specforge]: {reply_raw}"
+        session_cache.append_turn(session_id=session_id, user_text=payload.text, assistant_text=reply)
+    except Exception:
+        pass
+        intent = synthetic_intent_for_workflow(payload.text)
+        reply = f"[specforge]: {reply_raw}"
+
+    trace_payload = [TraceStep.model_validate(s).model_dump() for s in trace_raw]
+
+    yield {
+        "type": "meta",
+        "session_id": session_id,
+        "intent": intent.model_dump(),
+        "trace_id": "",
+        "trace": trace_payload,
+        "mode": payload.mode,
+    }
+    yield {"type": "done"}
 
 
 def _parse_json_field(raw: str) -> list[str]:
@@ -229,54 +320,20 @@ async def chat_stream_api(
     x_session_id: str | None = Header(default=None),
     x_trace_id: str | None = Header(default=None, alias="x-trace-id"),
 ):
-    """
-    SSE 流式输出接口：返回 text/event-stream。
-    说明：本实现先走一次 router 生成完整回复，然后把 reply 按片段分批吐给前端。
-    这样可以不破坏现有 LangGraph 逻辑，同时让前端获得“打字机效果”的流式体验。
-    """
+    """SSE 流式输出: 流水线各步骤实时推送状态/delta 事件。"""
     session_id = x_session_id or str(uuid4())
     trace_id = (x_trace_id or "").strip() or str(uuid4())
 
-    try:
-        reply, intent, trace_raw, _active = _execute_turn(payload, session_id)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"turn failed: {exc}") from exc
-
-    # 每次回复后写回 Redis，会话 TTL 维持 1 小时
-    try:
-        session_cache.append_turn(
-            session_id=session_id,
-            user_text=payload.text,
-            assistant_text=reply,
-        )
-    except Exception:
-        pass
-
-    trace_payload = [TraceStep.model_validate(s).model_dump() for s in trace_raw]
-
     async def event_gen():
-        # 1) meta（含全链路追踪，便于前端展示）
-        meta = {
-            "session_id": session_id,
-            "intent": intent.model_dump(),
-            "trace_id": trace_id,
-            "trace": trace_payload,
-            "mode": payload.mode,
-        }
-        yield f"data: {json.dumps(meta, ensure_ascii=False)}\n\n"
-
-        # 2) content chunks (pseudo streaming)
-        chunk_size = 12
-        for i in range(0, len(reply), chunk_size):
-            piece = reply[i : i + chunk_size]
-            data = {"type": "delta", "content": piece}
-            yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
-            await asyncio.sleep(0.01)
-
-        # 3) done
-        yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+        try:
+            async for event in _execute_turn_stream(payload, session_id):
+                if event.get("type") == "meta":
+                    event["trace_id"] = trace_id
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except HTTPException:
+            raise
+        except Exception as exc:
+            yield f"data: {json.dumps({'type': 'error', 'detail': f'turn failed: {exc}'}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         event_gen(),
@@ -290,8 +347,8 @@ async def chat_export_api(x_session_id: str | None = Header(default=None), limit
     """
     导出当前 session 的最近对话轮次到 output/chats/*.jsonl。
 
-    - 文件命名：YYYYMMDD_HHMMSS_首句prompt截断.jsonl
-    - 内容：每行一个 {user, assistant, ts}
+    - 文件命名:YYYYMMDD_HHMMSS_首句prompt截断.jsonl
+    - 内容:每行一个 {user, assistant, ts}
     """
     if not x_session_id:
         raise HTTPException(status_code=400, detail="missing x-session-id header")
