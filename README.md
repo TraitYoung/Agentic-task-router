@@ -9,6 +9,9 @@
 [![Redis](https://img.shields.io/badge/Cache-Redis-red.svg)](https://redis.io/)
 [![TypeScript](https://img.shields.io/badge/Lang-TypeScript-3178c6.svg)](https://www.typescriptlang.org/)
 [![Tailwind CSS](https://img.shields.io/badge/CSS-Tailwind_v4-06b6d4.svg)](https://tailwindcss.com/)
+[![CI](https://github.com/TraitYoung/specForge/actions/workflows/ci.yml/badge.svg)](https://github.com/TraitYoung/specForge/actions/workflows/ci.yml)
+
+**公开仓库：** [github.com/TraitYoung/specForge](https://github.com/TraitYoung/specForge) · **实现映射：** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 **你用 AI 写出了能跑的 demo，但它能上线吗？**
 
@@ -37,6 +40,10 @@ Vibe coding 让每个人都能把想法变成软件，但非科班背景的用�
 4. **测试与交付** — 测试用例、完成定义 (DoD)、CI/CD 提示、CHANGELOG、Sprint 回顾
 
 附带**可直接粘贴到 Cursor/Copilot 的实现 prompt**。
+
+### 履历/面试速查：设计要点 → 代码位置
+
+与常见简历描述一致的落点见 **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**（双模式流水线、五个 Pydantic 模型、并行阶段、画像检测、模型路由与上下文预算、SSE/Redis/Trace、RAG 等）。合并入 `main` 后可通过上方 **CI** 徽章查看 `pytest` + 前端 `tsc`/`build` 是否通过。
 
 ### 逆向审查 (Review)：代码 → 审查报告
 
@@ -112,7 +119,7 @@ cd frontend && npm install && npm run dev
 │   │   ├── page.tsx                     # 聊天主页面（SSE + Trace 面板）
 │   │   └── api/                         # API 反向代理到 FastAPI
 │   └── lib/backend.ts
-├── tests/                               # pytest（20 tests）
+├── tests/                               # pytest（32 用例）
 ├── scripts/
 │   ├── dev_stack.ps1                    # 开发环境管理
 │   └── locustfile.py                    # 压测入口

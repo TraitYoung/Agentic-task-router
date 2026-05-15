@@ -75,11 +75,35 @@ function Is-ProcessAlive([int]$ProcId) {
     return $null -ne $proc
 }
 
+function Test-LocalListenPort([int]$Port) {
+    $g = [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties()
+    foreach ($ep in $g.GetActiveTcpListeners()) {
+        if ($ep.Port -eq $Port) { return $true }
+    }
+    return $false
+}
+
 function Get-PortPids([int]$Port) {
-    $list = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
-        Select-Object -ExpandProperty OwningProcess -Unique
-    if ($null -eq $list) { return @() }
-    return @($list)
+    # Get-NetTCPConnection 在部分 Windows 环境下会非常慢导致“脚本未响应”；优先用 netstat 解析。
+    $pids = [System.Collections.Generic.HashSet[int]]::new()
+    foreach ($line in @(netstat.exe -ano -p tcp 2>$null)) {
+        if ($line -match "\:${Port}\s+\S+\s+LISTENING\s+(\d+)") {
+            [void]$pids.Add([int]$Matches[1])
+        }
+    }
+    # 端口未监听时禁止调用 Get-NetTCPConnection：在本机即使带 -LocalPort 仍可能每次耗时十余秒。
+    if ($pids.Count -eq 0 -and (Test-LocalListenPort -Port $Port)) {
+        try {
+            $fallback = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+                Select-Object -ExpandProperty OwningProcess -Unique
+            if ($null -ne $fallback) {
+                foreach ($x in @($fallback)) { [void]$pids.Add([int]$x) }
+            }
+        } catch {
+            # ignore
+        }
+    }
+    return @($pids)
 }
 
 function Stop-ByPort([int]$Port) {
@@ -156,8 +180,7 @@ function Start-One([string]$name, [hashtable]$pids) {
     Write-Host "[$name] started (PID=$($proc.Id), port=$($svc.Port))"
     if ($name -eq "redis") {
         Start-Sleep -Milliseconds 500
-        $listen = @(Get-NetTCPConnection -LocalPort $svc.Port -State Listen -ErrorAction SilentlyContinue)
-        if ($listen.Count -eq 0) {
+        if (-not (Test-LocalListenPort -Port $svc.Port)) {
             Write-Warning "[$name] 端口 $($svc.Port) 未处于 Listen。常见原因：旧实例（如 Windows 服务）仍占用端口，或 redis-server 启动失败。请查看 $($svc.Log)"
         }
     }

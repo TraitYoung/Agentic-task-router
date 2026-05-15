@@ -9,7 +9,7 @@
 | 脚本 | `scripts/` | 开发环境管理（dev_stack.ps1）、压测（locustfile.py） |
 | 测试 | `tests/` | pytest，依赖 `backend/` 在 `sys.path` 中 |
 | 产物与数据 | `data/`、`output/`、`logs/` | 默认 `.gitignore` 忽略；路径通过 `backend/repo_paths.py` 解析 |
-| 文档 | `docs/` | 架构说明、ADR、历史归档 |
+| 文档 | `docs/` | [架构与履历映射](docs/ARCHITECTURE.md)、[项目结构与技术要点](docs/项目结构与技术要点.md)、历史归档 |
 
 `.env` 放在**仓库根**，由 `backend/repo_paths.REPO_ROOT` 加载。
 
