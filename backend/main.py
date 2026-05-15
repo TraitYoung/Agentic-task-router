@@ -78,7 +78,6 @@ def _execute_turn(payload: ChatRequest, session_id: str) -> tuple[str, TaskInten
     retrieval_context = ""
 
     if payload.mode == "review":
-        # 检索高频问题 + 相似代码审查模式
         top_issues = store.get_top_issues(limit=8)
         if top_issues:
             retrieval_context = "高频问题模式（按频率降序）：\n" + "\n".join(
@@ -88,22 +87,28 @@ def _execute_turn(payload: ChatRequest, session_id: str) -> tuple[str, TaskInten
         llm = resolve_step_llm("reverse_engineer", None)
         reply_raw, trace_raw = run_reverse_engineer(payload.text, llm, retrieval_context=retrieval_context)
     else:
-        # 检索相似历史规格作为参考
         past_specs = store.search_specs(payload.text, mode="spec", limit=3)
         if past_specs:
-            retrieval_context = "\n---\n".join(
-                f"历史方案（目标：{s['goal']}）\n用户故事：{s['user_stories']}\n模块：{s['modules']}"
-                for s in past_specs
-            )
+            parts: list[str] = []
+            for s in past_specs:
+                stories = _parse_json_field(s.get("user_stories", "[]"))
+                modules = _parse_json_field(s.get("modules", "[]"))
+                parts.append(
+                    f"• 目标：{s['goal']}\n"
+                    f"  用户故事：{', '.join(stories) if stories else '无'}\n"
+                    f"  模块：{', '.join(modules) if modules else '无'}"
+                )
+            retrieval_context = "\n".join(parts)
         llm = resolve_step_llm("discovery", None)
         reply_raw, trace_raw = run_dev_pipeline(payload.text, llm, retrieval_context=retrieval_context)
 
-    # 异步保存到知识库（不阻塞响应）
+    # 从 trace 中提取 profile，保存到知识库
+    profile = _extract_profile(trace_raw)
     try:
         if payload.mode == "review":
-            _save_review_issues(store, reply_raw, payload.text)
+            _save_review_issues(store, trace_raw, profile)
         else:
-            _save_spec_result(store, reply_raw, payload.text)
+            _save_spec_result(store, trace_raw, payload.text, profile)
     except Exception:
         pass
 
@@ -112,71 +117,72 @@ def _execute_turn(payload: ChatRequest, session_id: str) -> tuple[str, TaskInten
     return reply, intent, trace_raw, payload.mode
 
 
-def _save_spec_result(store, reply: str, user_text: str) -> None:
-    """从正向工程结果中粗略提取关键字段并保存。"""
-    import re
+def _parse_json_field(raw: str) -> list[str]:
+    """安全解析 JSON 字符串字段，返回字符串列表。"""
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return [str(x) for x in parsed]
+        return []
+    except (json.JSONDecodeError, TypeError):
+        return []
 
-    goal = ""
-    stories: list[str] = []
-    modules: list[str] = []
 
-    # 简单启发式提取 goal
-    m = re.search(r'"goal"\s*:\s*"([^"]+)"', reply)
-    if m:
-        goal = m.group(1)
-    else:
-        goal = user_text[:200]
+def _extract_profile(trace_raw: list) -> str:
+    """从 trace 首步的 summary 中提取项目画像名。"""
+    if trace_raw and isinstance(trace_raw[0], dict):
+        return str(trace_raw[0].get("summary", {}).get("profile", ""))
+    return ""
 
-    # 提取 user_stories
-    for m in re.finditer(r'"user_stories"\s*:\s*\[([^\]]+)\]', reply, re.DOTALL):
-        for s in re.finditer(r'"([^"]+)"', m.group(1)):
-            stories.append(s.group(1))
 
-    # 提取 modules
-    for m in re.finditer(r'"modules"\s*:\s*\[([^\]]+)\]', reply, re.DOTALL):
-        for s in re.finditer(r'"([^"]+)"', m.group(1)):
-            modules.append(s.group(1))
+def _save_spec_result(store, trace_raw: list, user_text: str, profile: str) -> None:
+    """从 trace 中提取 Discovery 步骤的结构化数据并保存。"""
+    if not trace_raw:
+        return
+
+    discovery = trace_raw[0].get("summary", {}).get("discovery", {})
+    sprint_design = (
+        trace_raw[1].get("summary", {}).get("sprint_design", {})
+        if len(trace_raw) > 1
+        else {}
+    )
 
     store.save_spec(
         mode="spec",
-        profile="",
+        profile=profile,
         user_text=user_text[:500],
-        goal=goal,
-        user_stories=stories[:6],
-        modules=modules[:12],
-        full_summary=reply[:4000],
+        goal=str(discovery.get("goal", user_text[:200])),
+        user_stories=list(discovery.get("user_stories", [])),
+        modules=list(sprint_design.get("modules", [])),
+        full_summary=json.dumps(
+            {"discovery": discovery, "sprint": sprint_design},
+            ensure_ascii=False,
+        )[:4000],
     )
 
 
-def _save_review_issues(store, reply: str, user_text: str) -> None:
-    """从逆向审查结果中提取问题并保存。"""
-    import re
+def _save_review_issues(store, trace_raw: list, profile: str) -> None:
+    """从 trace 中提取审查发现的问题并保存。"""
+    if not trace_raw:
+        return
 
+    spec = trace_raw[0].get("summary", {}).get("reverse_engineer", {})
     issues: list[dict[str, str]] = []
 
-    # 提取 architecture_issues
-    for m in re.finditer(r'"architecture_issues"\s*:\s*\[([^\]]+)\]', reply, re.DOTALL):
-        for s in re.finditer(r'"([^"]+)"', m.group(1)):
-            issues.append({"type": "architecture", "text": s.group(1), "suggestion": ""})
+    for item in spec.get("architecture_issues", []):
+        issues.append({"type": "architecture", "text": str(item), "suggestion": ""})
+    for item in spec.get("code_quality_issues", []):
+        issues.append({"type": "code_quality", "text": str(item), "suggestion": ""})
 
-    # 提取 code_quality_issues
-    for m in re.finditer(r'"code_quality_issues"\s*:\s*\[([^\]]+)\]', reply, re.DOTALL):
-        for s in re.finditer(r'"([^"]+)"', m.group(1)):
-            issues.append({"type": "code_quality", "text": s.group(1), "suggestion": ""})
-
-    # 提取 improvement_plan 作为建议
-    suggestions: list[str] = []
-    for m in re.finditer(r'"improvement_plan"\s*:\s*\[([^\]]+)\]', reply, re.DOTALL):
-        for s in re.finditer(r'"([^"]+)"', m.group(1)):
-            suggestions.append(s.group(1))
-
-    # 将建议附加到对应问题上
+    suggestions = [str(s) for s in spec.get("improvement_plan", [])]
     for i, issue in enumerate(issues):
         if i < len(suggestions):
             issue["suggestion"] = suggestions[i]
 
     if issues:
-        store.save_issues(profile="", issues=issues)
+        store.save_issues(profile=profile, issues=issues)
 
 
 @app.post("/api/v1/chat", response_model=ChatResponse)
