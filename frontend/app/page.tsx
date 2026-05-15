@@ -340,6 +340,15 @@ export default function Home() {
               )
             );
           }
+          if (msg.type === "status") {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantMsgId && !m.content
+                  ? { ...m, content: `> ${msg.text as string}` }
+                  : m
+              )
+            );
+          }
         }
       }
 
