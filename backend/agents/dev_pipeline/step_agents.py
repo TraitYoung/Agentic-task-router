@@ -70,22 +70,25 @@ def _json_clip(obj: Any, max_chars: int) -> str:
     return clip_text(s, max_chars)
 
 
-def run_discovery_step(*, llm, raw_text: str, profile_injection: str) -> DevTaskSpec:
+def run_discovery_step(
+    *, llm, raw_text: str, profile_injection: str, retrieval_context: str = ""
+) -> DevTaskSpec:
     step_llm = resolve_step_llm(DISCOVERY_CFG.step_id, llm)
     model = step_llm.with_structured_output(DevTaskSpec)
+    system_parts = [
+        f"你是{DISCOVERY_CFG.role}。{profile_injection}",
+        "只根据用户原文抽取结构化结果，填满 DevTaskSpec 各字段。",
+        "- goal：业务目标一句话 + 必要背景。",
+        "- acceptance_criteria：可测试、可验收。",
+        "- user_stories：3~6 条，尽量 As a / I want / so that。",
+        "- mvp_sprint_goal：本迭代最小可用增量。",
+        "- measurable_outcomes：可观察结果或指标。",
+    ]
+    if retrieval_context:
+        system_parts.append(f"\n参考历史类似方案（可借鉴思路但勿照搬）：\n{retrieval_context}")
     return model.invoke(
         [
-            SystemMessage(
-                content=(
-                    f"你是{DISCOVERY_CFG.role}。{profile_injection}\n"
-                    "只根据用户原文抽取结构化结果，填满 DevTaskSpec 各字段。\n"
-                    "- goal：业务目标一句话 + 必要背景。\n"
-                    "- acceptance_criteria：可测试、可验收。\n"
-                    "- user_stories：3~6 条，尽量 As a / I want / so that。\n"
-                    "- mvp_sprint_goal：本迭代最小可用增量。\n"
-                    "- measurable_outcomes：可观察结果或指标。"
-                )
-            ),
+            SystemMessage(content="\n".join(system_parts)),
             HumanMessage(content=f"产品负责人原始描述：\n{raw_text}"),
         ]
     )
@@ -209,25 +212,30 @@ def run_merge_step(
     return str(rsp.content).strip()
 
 
-def run_reverse_engineer_step(*, llm, code: str, profile_injection: str) -> ReverseEngineerSpec:
+def run_reverse_engineer_step(
+    *, llm, code: str, profile_injection: str, retrieval_context: str = ""
+) -> ReverseEngineerSpec:
     """逆向工程：从现有代码反推需求、测试缺失与改进计划。"""
     step_llm = resolve_step_llm(REVERSE_ENGINEER_CFG.step_id, llm)
     model = step_llm.with_structured_output(ReverseEngineerSpec)
     clipped_code = clip_text(code, WORKFLOW_STEP_JSON_MAX_CHARS * 2)
+    system_parts = [
+        f"你是{REVERSE_ENGINEER_CFG.role}。请审查以下代码，反向推导：",
+        "1. inferred_goal：这段代码在解决什么业务问题？",
+        "2. inferred_user_stories：可以反推出哪些用户故事？",
+        "3. missing_tests：缺少哪些测试用例？",
+        "4. architecture_issues：架构层面的问题（耦合、职责不清、缺少抽象等）",
+        "5. code_quality_issues：代码质量问题（命名、错误处理、硬编码等）",
+        "6. improvement_plan：按优先级排列的改进计划",
+        profile_injection,
+    ]
+    if retrieval_context:
+        system_parts.append(
+            f"\n已知高频问题模式（请特别关注是否匹配以下问题，如匹配请引用）：\n{retrieval_context}"
+        )
     return model.invoke(
         [
-            SystemMessage(
-                content=(
-                    f"你是{REVERSE_ENGINEER_CFG.role}。请审查以下代码，反向推导：\n"
-                    f"1. inferred_goal：这段代码在解决什么业务问题？\n"
-                    f"2. inferred_user_stories：可以反推出哪些用户故事？\n"
-                    f"3. missing_tests：缺少哪些测试用例？\n"
-                    f"4. architecture_issues：架构层面的问题（耦合、职责不清、缺少抽象等）\n"
-                    f"5. code_quality_issues：代码质量问题（命名、错误处理、硬编码等）\n"
-                    f"6. improvement_plan：按优先级排列的改进计划\n"
-                    f"{profile_injection}"
-                )
-            ),
+            SystemMessage(content="\n".join(system_parts)),
             HumanMessage(content=f"待审查代码：\n```\n{clipped_code}\n```"),
         ]
     )

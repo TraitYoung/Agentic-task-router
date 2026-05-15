@@ -43,7 +43,7 @@ def _trace_step(idx: int, node: str, t_ms: float, summary: dict[str, Any]) -> di
     }
 
 
-def run_dev_pipeline(user_text: str, llm):
+def run_dev_pipeline(user_text: str, llm, *, retrieval_context: str = ""):
     """返回 (final_markdown, trace_steps)."""
     clipped = clip_text(user_text.strip(), WORKFLOW_USER_TEXT_MAX_CHARS)
     profile = detect_dev_profile(clipped)
@@ -53,7 +53,9 @@ def run_dev_pipeline(user_text: str, llm):
 
     # 1) discovery
     t0 = time.perf_counter()
-    spec = run_discovery_step(llm=llm, raw_text=clipped, profile_injection=profile_injection)
+    spec = run_discovery_step(
+        llm=llm, raw_text=clipped, profile_injection=profile_injection, retrieval_context=retrieval_context
+    )
     t1 = (time.perf_counter() - t0) * 1000
     steps.append(_trace_step(1, DISCOVERY_CFG.node, t1, {"profile": profile["name"], "discovery": spec.model_dump()}))
 
@@ -144,7 +146,7 @@ def run_dev_pipeline(user_text: str, llm):
     return final, steps
 
 
-def run_reverse_engineer(code: str, llm):
+def run_reverse_engineer(code: str, llm, *, retrieval_context: str = ""):
     """逆向工程：代码 → 需求规格 + 改进计划。返回 (final_markdown, trace_steps)."""
     clipped = clip_text(code.strip(), WORKFLOW_USER_TEXT_MAX_CHARS)
     profile = detect_dev_profile(clipped)
@@ -152,7 +154,9 @@ def run_reverse_engineer(code: str, llm):
     steps: list[dict[str, Any]] = []
 
     t0 = time.perf_counter()
-    spec = run_reverse_engineer_step(llm=llm, code=clipped, profile_injection=profile_injection)
+    spec = run_reverse_engineer_step(
+        llm=llm, code=clipped, profile_injection=profile_injection, retrieval_context=retrieval_context
+    )
     t1 = (time.perf_counter() - t0) * 1000
     steps.append(
         _trace_step(

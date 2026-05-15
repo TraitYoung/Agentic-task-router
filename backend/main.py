@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from config.step_model_routing import resolve_step_llm
 from agents.workflow_pipelines import run_dev_pipeline, run_reverse_engineer, synthetic_intent_for_workflow
 from memory.session_cache import SessionCache
+from memory.spec_store import get_spec_store
 from schemas.protocols import TaskIntent
 from schemas.trace import TraceStep
 from core_logging import configure_stdio_utf8, setup_logging
@@ -73,15 +74,109 @@ class ChatHistoryResponse(BaseModel):
 
 
 def _execute_turn(payload: ChatRequest, session_id: str) -> tuple[str, TaskIntent, list, str]:
+    store = get_spec_store()
+    retrieval_context = ""
+
     if payload.mode == "review":
+        # 检索高频问题 + 相似代码审查模式
+        top_issues = store.get_top_issues(limit=8)
+        if top_issues:
+            retrieval_context = "高频问题模式（按频率降序）：\n" + "\n".join(
+                f"- [{i['issue_type']}] {i['issue_text']}（出现 {i['frequency']} 次）"
+                for i in top_issues
+            )
         llm = resolve_step_llm("reverse_engineer", None)
-        reply_raw, trace_raw = run_reverse_engineer(payload.text, llm)
+        reply_raw, trace_raw = run_reverse_engineer(payload.text, llm, retrieval_context=retrieval_context)
     else:
+        # 检索相似历史规格作为参考
+        past_specs = store.search_specs(payload.text, mode="spec", limit=3)
+        if past_specs:
+            retrieval_context = "\n---\n".join(
+                f"历史方案（目标：{s['goal']}）\n用户故事：{s['user_stories']}\n模块：{s['modules']}"
+                for s in past_specs
+            )
         llm = resolve_step_llm("discovery", None)
-        reply_raw, trace_raw = run_dev_pipeline(payload.text, llm)
+        reply_raw, trace_raw = run_dev_pipeline(payload.text, llm, retrieval_context=retrieval_context)
+
+    # 异步保存到知识库（不阻塞响应）
+    try:
+        if payload.mode == "review":
+            _save_review_issues(store, reply_raw, payload.text)
+        else:
+            _save_spec_result(store, reply_raw, payload.text)
+    except Exception:
+        pass
+
     intent = synthetic_intent_for_workflow(payload.text)
     reply = f"[specforge]: {reply_raw}"
     return reply, intent, trace_raw, payload.mode
+
+
+def _save_spec_result(store, reply: str, user_text: str) -> None:
+    """从正向工程结果中粗略提取关键字段并保存。"""
+    import re
+
+    goal = ""
+    stories: list[str] = []
+    modules: list[str] = []
+
+    # 简单启发式提取 goal
+    m = re.search(r'"goal"\s*:\s*"([^"]+)"', reply)
+    if m:
+        goal = m.group(1)
+    else:
+        goal = user_text[:200]
+
+    # 提取 user_stories
+    for m in re.finditer(r'"user_stories"\s*:\s*\[([^\]]+)\]', reply, re.DOTALL):
+        for s in re.finditer(r'"([^"]+)"', m.group(1)):
+            stories.append(s.group(1))
+
+    # 提取 modules
+    for m in re.finditer(r'"modules"\s*:\s*\[([^\]]+)\]', reply, re.DOTALL):
+        for s in re.finditer(r'"([^"]+)"', m.group(1)):
+            modules.append(s.group(1))
+
+    store.save_spec(
+        mode="spec",
+        profile="",
+        user_text=user_text[:500],
+        goal=goal,
+        user_stories=stories[:6],
+        modules=modules[:12],
+        full_summary=reply[:4000],
+    )
+
+
+def _save_review_issues(store, reply: str, user_text: str) -> None:
+    """从逆向审查结果中提取问题并保存。"""
+    import re
+
+    issues: list[dict[str, str]] = []
+
+    # 提取 architecture_issues
+    for m in re.finditer(r'"architecture_issues"\s*:\s*\[([^\]]+)\]', reply, re.DOTALL):
+        for s in re.finditer(r'"([^"]+)"', m.group(1)):
+            issues.append({"type": "architecture", "text": s.group(1), "suggestion": ""})
+
+    # 提取 code_quality_issues
+    for m in re.finditer(r'"code_quality_issues"\s*:\s*\[([^\]]+)\]', reply, re.DOTALL):
+        for s in re.finditer(r'"([^"]+)"', m.group(1)):
+            issues.append({"type": "code_quality", "text": s.group(1), "suggestion": ""})
+
+    # 提取 improvement_plan 作为建议
+    suggestions: list[str] = []
+    for m in re.finditer(r'"improvement_plan"\s*:\s*\[([^\]]+)\]', reply, re.DOTALL):
+        for s in re.finditer(r'"([^"]+)"', m.group(1)):
+            suggestions.append(s.group(1))
+
+    # 将建议附加到对应问题上
+    for i, issue in enumerate(issues):
+        if i < len(suggestions):
+            issue["suggestion"] = suggestions[i]
+
+    if issues:
+        store.save_issues(profile="", issues=issues)
 
 
 @app.post("/api/v1/chat", response_model=ChatResponse)
