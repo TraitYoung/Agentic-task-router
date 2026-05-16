@@ -5,10 +5,12 @@ from datetime import datetime, timezone
 from typing import List, Literal
 
 from fastapi import FastAPI, Header, HTTPException, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from config.step_model_routing import resolve_step_llm
+from middleware import RateLimitMiddleware
 from agents.workflow_pipelines import run_dev_pipeline, run_reverse_engineer, synthetic_intent_for_workflow
 from agents.dev_pipeline.orchestrator import run_dev_pipeline_stream, run_reverse_engineer_stream
 from memory.session_cache import SessionCache
@@ -24,6 +26,15 @@ setup_logging()
 logger = get_logger("specforge.main")
 
 app = FastAPI(title="SpecForge API", version="2.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.add_middleware(RateLimitMiddleware)
 
 session_cache = SessionCache(ttl_seconds=3600, window_size=5)
 
