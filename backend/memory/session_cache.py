@@ -71,3 +71,9 @@ class SessionCache:
                 f"Round {idx}\nUser: {turn['user']}\nAssistant: {turn['assistant']}"
             )
         return lines
+
+    def close(self) -> None:
+        try:
+            self.client.close()
+        except Exception:
+            pass

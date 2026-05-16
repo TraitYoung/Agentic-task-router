@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
+
+logger = logging.getLogger("specforge.step_agents")
 
 from config.context_budget import WORKFLOW_STEP_JSON_MAX_CHARS, clip_text
 from config.step_model_routing import resolve_step_llm
@@ -217,10 +220,14 @@ def run_merge_step(
             if token:
                 stream_callback(token)
                 full.append(token)
-        return "".join(full).strip()
+        result = "".join(full).strip()
+        logger.info("merge step streamed: chars=%d", len(result))
+        return result
 
     rsp = step_llm.invoke(messages)
-    return str(rsp.content).strip()
+    result = str(rsp.content).strip()
+    logger.info("merge step done: chars=%d", len(result))
+    return result
 
 
 def run_reverse_engineer_step(
