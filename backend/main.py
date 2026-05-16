@@ -29,6 +29,11 @@ session_cache = SessionCache(ttl_seconds=3600, window_size=5)
 
 spec_store = get_spec_store()
 
+# 启动时校验关键配置
+import os as _os
+if not _os.getenv("QWEN_API_KEY"):
+    logger.warning("QWEN_API_KEY not set — LLM calls will fail. Copy .env.example to .env and fill in your key.")
+
 
 @app.on_event("shutdown")
 def _shutdown() -> None:
