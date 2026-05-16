@@ -1,25 +1,59 @@
 services:
   redis:
     image: redis:7-alpine
-    container_name: axiodrasil-redis
+    container_name: specforge-redis
     ports:
       - "6379:6379"
     command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
 
   api:
-    image: python:3.13-slim
-    container_name: axiodrasil-api
-    working_dir: /app
-    volumes:
-      - ./:/app
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: specforge-api
+    ports:
+      - "8000:8000"
     env_file:
       - .env
     environment:
       REDIS_URL: redis://redis:6379/0
-    command: >
-      sh -c "pip install --no-cache-dir -r requirements.txt &&
-             uvicorn main:app --app-dir backend --host 0.0.0.0 --port 8000 --reload"
-    ports:
-      - "8000:8000"
     depends_on:
-      - redis
+      redis:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: frontend
+      dockerfile: Dockerfile
+    container_name: specforge-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      BACKEND_URL: http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+volumes:
+  redis_data:
