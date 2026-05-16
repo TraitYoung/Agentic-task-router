@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -11,6 +12,8 @@ from typing import Any
 
 from config.context_budget import WORKFLOW_USER_TEXT_MAX_CHARS, clip_text
 from prompts.dev_pipeline_profiles import detect_dev_profile
+
+logger = logging.getLogger("specforge.orchestrator")
 
 from .step_agents import (
     DELIVERY_CFG,
@@ -46,8 +49,11 @@ def _trace_step(idx: int, node: str, t_ms: float, summary: dict[str, Any]) -> di
 
 def run_dev_pipeline(user_text: str, llm, *, retrieval_context: str = ""):
     """返回 (final_markdown, trace_steps)."""
+    t_total = time.perf_counter()
     clipped = clip_text(user_text.strip(), WORKFLOW_USER_TEXT_MAX_CHARS)
     profile = detect_dev_profile(clipped)
+    logger.info("dev_pipeline start: profile=%s text_len=%d retrieval=%s",
+                profile["name"], len(clipped), "yes" if retrieval_context else "no")
     profile_injection = profile["prompt_injection"]
     profile_focus = "、".join(profile["output_focus"])
     steps: list[dict[str, Any]] = []
@@ -144,13 +150,18 @@ def run_dev_pipeline(user_text: str, llm, *, retrieval_context: str = ""):
         "### 5) 并行汇总（Merge）\n"
         f"{merged_notes}\n"
     )
+    logger.info("dev_pipeline done: profile=%s steps=%d total_ms=%d",
+                profile["name"], len(steps), int((time.perf_counter() - t_total) * 1000))
     return final, steps
 
 
 def run_reverse_engineer(code: str, llm, *, retrieval_context: str = ""):
     """逆向工程：代码 → 需求规格 + 改进计划。返回 (final_markdown, trace_steps)."""
+    t_total = time.perf_counter()
     clipped = clip_text(code.strip(), WORKFLOW_USER_TEXT_MAX_CHARS)
     profile = detect_dev_profile(clipped)
+    logger.info("reverse_engineer start: profile=%s code_len=%d retrieval=%s",
+                profile["name"], len(clipped), "yes" if retrieval_context else "no")
     profile_injection = profile["prompt_injection"]
     steps: list[dict[str, Any]] = []
 
@@ -194,6 +205,8 @@ def run_reverse_engineer(code: str, llm, *, retrieval_context: str = ""):
         "### 可粘贴到 Cursor 的改进 Prompt\n\n"
         f"```\n{review_prompt}\n```\n"
     )
+    logger.info("reverse_engineer done: profile=%s steps=%d total_ms=%d",
+                profile["name"], len(steps), int((time.perf_counter() - t_total) * 1000))
     return final, steps
 
 

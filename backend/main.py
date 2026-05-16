@@ -15,15 +15,26 @@ from memory.session_cache import SessionCache
 from memory.spec_store import get_spec_store
 from schemas.protocols import TaskIntent
 from schemas.trace import TraceStep
-from core_logging import configure_stdio_utf8, setup_logging
+from core_logging import configure_stdio_utf8, get_logger, setup_logging
 from repo_paths import REPO_ROOT
 
 configure_stdio_utf8()
 setup_logging()
 
+logger = get_logger("specforge.main")
+
 app = FastAPI(title="SpecForge API", version="2.0.0")
 
 session_cache = SessionCache(ttl_seconds=3600, window_size=5)
+
+spec_store = get_spec_store()
+
+
+@app.on_event("shutdown")
+def _shutdown() -> None:
+    session_cache.close()
+    spec_store.close()
+    logger.info("shutdown complete")
 
 
 @app.get("/api/v1/health")
@@ -110,8 +121,8 @@ def _execute_turn(payload: ChatRequest, session_id: str) -> tuple[str, TaskInten
             _save_review_issues(store, trace_raw, profile)
         else:
             _save_spec_result(store, trace_raw, payload.text, profile)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("save to spec_store failed: %s", exc)
 
     intent = synthetic_intent_for_workflow(payload.text)
     reply = f"[specforge]: {reply_raw}"
@@ -183,15 +194,15 @@ async def _execute_turn_stream(payload: ChatRequest, session_id: str):
             _save_review_issues(store, trace_raw, profile)
         else:
             _save_spec_result(store, trace_raw, payload.text, profile)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("save to spec_store failed (stream): %s", exc)
 
     try:
         intent = synthetic_intent_for_workflow(payload.text)
         reply = f"[specforge]: {reply_raw}"
         session_cache.append_turn(session_id=session_id, user_text=payload.text, assistant_text=reply)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Redis append_turn failed: %s", exc)
         intent = synthetic_intent_for_workflow(payload.text)
         reply = f"[specforge]: {reply_raw}"
 

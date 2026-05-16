@@ -5,13 +5,17 @@
 
 from __future__ import annotations
 
+import atexit
 import json
+import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from repo_paths import REPO_ROOT
+
+logger = logging.getLogger("specforge.spec_store")
 
 DB_PATH = REPO_ROOT / "data" / "spec_store.db"
 
@@ -104,7 +108,14 @@ class SpecStore:
             ),
         )
         self._conn.commit()
+        logger.info("spec saved: mode=%s profile=%s goal=%s", mode, profile, goal[:80])
         return cur.lastrowid
+
+    def close(self) -> None:
+        try:
+            self._conn.close()
+        except Exception:
+            pass
 
     def search_specs(self, query: str, mode: str = "", limit: int = 5) -> list[dict[str, Any]]:
         """FTS5 全文检索相似历史规格，中文回退 LIKE。返回 goal + user_stories + modules。"""
@@ -179,6 +190,7 @@ class SpecStore:
                 )
             count += 1
         self._conn.commit()
+        logger.info("issues saved: profile=%s count=%d", profile, count)
         return count
 
     def search_issues(
@@ -248,4 +260,10 @@ def get_spec_store() -> SpecStore:
     global _store
     if _store is None:
         _store = SpecStore()
-    return _store
+        atexit.register(_shutdown_store)
+
+def _shutdown_store() -> None:
+    global _store
+    if _store is not None:
+        _store.close()
+        _store = None
