@@ -1,3 +1,13 @@
+---
+title: SpecForge API
+emoji: 🛠️
+colorFrom: blue
+colorTo: green
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 🔗 Live Demo: 待部署到 Vercel 后替换为真实 URL
 
 # SpecForge — AI 软件工程规格锻造
@@ -164,13 +174,13 @@ cd frontend && npm install && npm run dev
 ### 推荐拓扑
 
 - Frontend: Vercel, root directory 选择 `frontend`, 构建命令 `npm run build`, 安装命令 `npm ci`.
-- Backend: Render Web Service, 使用仓库根目录的 `render.yaml`, health check path 为 `/api/v1/health`.
-- Redis: Upstash Redis 免费层, 将连接串填入 Render 的 `REDIS_URL`. Redis 不可用时系统会降级为无会话缓存, 核心生成能力仍可用.
-- Database: SQLite FTS5, 首次启动由 `SpecStore._migrate()` 自动初始化 `data/spec_store.db`. Render 免费容器文件系统可能重启丢失, 作品集 demo 可接受; 生产环境应挂载持久卷或迁移到托管数据库.
+- Backend: Hugging Face Spaces Docker, 使用仓库根目录的 `Dockerfile` 与 README 顶部 `sdk: docker` / `app_port: 7860`.
+- Redis: Upstash Redis 免费层, 将连接串填入 Hugging Face Space Secrets 的 `REDIS_URL`. Redis 不可用时系统会降级为无会话缓存, 核心生成能力仍可用.
+- Database: SQLite FTS5, 首次启动由 `SpecStore._migrate()` 自动初始化 `data/spec_store.db`. Hugging Face 免费 Space 的磁盘不保证长期持久化, 作品集 demo 可接受; 生产环境应迁移到托管数据库.
 
 ### 环境变量
 
-Backend(Render):
+Backend(Hugging Face Space Secrets):
 
 ```bash
 QWEN_API_KEY=your_qwen_api_key
@@ -182,7 +192,7 @@ REDIS_URL=redis://default:<password>@<host>:<port>
 Frontend(Vercel):
 
 ```bash
-BACKEND_URL=https://specforge-api.onrender.com
+BACKEND_URL=https://<your-hf-username>-specforge-api.hf.space
 ```
 
 ### Docker Compose
@@ -202,17 +212,17 @@ docker compose logs -f api
 docker compose logs -f frontend
 ```
 
-### Render 后端
+### Hugging Face Spaces 后端
 
-1. 在 Render 创建 Blueprint 或 Web Service, 连接本仓库.
-2. 选择 `render.yaml`; Dockerfile 为 `backend/Dockerfile`.
-3. 设置 `QWEN_API_KEY` 和可选 `REDIS_URL`.
-4. 部署后访问 `https://<service>.onrender.com/api/v1/health`, 看到 `ok: true` 即可.
+1. 打开 Hugging Face, New Space, SDK 选择 Docker, Space name 建议 `specforge-api`.
+2. 将本仓库推送到 Space 仓库, 或在 Space 的 Files 页面上传根目录 `Dockerfile`, `README.md`, `requirements.txt`, `backend/`.
+3. 在 Space Settings -> Repository secrets 中设置 `QWEN_API_KEY`, `QWEN_BASE_URL`, `QWEN_MODEL`, 可选 `REDIS_URL`.
+4. Space 构建完成后访问 `https://<your-hf-username>-specforge-api.hf.space/api/v1/health`, 看到 `ok: true` 即可.
 
 ### Vercel 前端
 
 1. Import Git Repository, root directory 填 `frontend`.
-2. Environment Variables 填 `BACKEND_URL=https://<render-service>.onrender.com`.
+2. Environment Variables 填 `BACKEND_URL=https://<your-hf-username>-specforge-api.hf.space`.
 3. 部署后访问 `/api/health`, 确认能代理到后端.
 4. 部署成功后, 将本 README 第一行 Live Demo 替换为真实 Vercel URL; 在此之前不要填写会 404 的占位域名.
 
