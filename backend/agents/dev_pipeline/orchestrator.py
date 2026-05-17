@@ -36,14 +36,44 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _estimate_tokens(value: Any) -> int:
+    try:
+        text = json.dumps(value, ensure_ascii=False)
+    except TypeError:
+        text = str(value)
+    return max(1, len(text) // 4) if text else 0
+
+
+def _memory_mb() -> float:
+    try:
+        import os
+        import psutil
+
+        return round(psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024, 2)
+    except Exception:
+        return 0.0
+
+
 def _trace_step(idx: int, node: str, t_ms: float, summary: dict[str, Any]) -> dict[str, Any]:
+    metrics = {
+        "estimated_tokens": _estimate_tokens(summary),
+        "memory_mb": _memory_mb(),
+    }
+    enriched_summary = {**summary, "_metrics": metrics}
+    logger.info(
+        "pipeline step done: node=%s duration_ms=%.2f estimated_tokens=%d memory_mb=%.2f",
+        node,
+        t_ms,
+        metrics["estimated_tokens"],
+        metrics["memory_mb"],
+    )
     return {
         "index": idx,
         "node": node,
         "ts": _now_iso(),
         "duration_ms": round(t_ms, 2),
         "keys_written": [],
-        "summary": summary,
+        "summary": enriched_summary,
     }
 
 
