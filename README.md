@@ -1,4 +1,4 @@
-🔗 Live Demo: 待部署到 Vercel 后替换为真实 URL
+🔗 Live Demo: https://spec-forge-phi.vercel.app/
 
 🔎 Backend Health: https://ishowrelx5-specforge-api.hf.space/api/v1/health
 
