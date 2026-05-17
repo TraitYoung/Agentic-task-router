@@ -1,14 +1,6 @@
----
-title: SpecForge API
-emoji: 🛠️
-colorFrom: blue
-colorTo: green
-sdk: docker
-app_port: 7860
-pinned: false
----
-
 🔗 Live Demo: 待部署到 Vercel 后替换为真实 URL
+
+🔎 Backend Health: https://ishowrelx5-specforge-api.hf.space/api/v1/health
 
 # SpecForge — AI 软件工程规格锻造
 
@@ -174,8 +166,8 @@ cd frontend && npm install && npm run dev
 ### 推荐拓扑
 
 - Frontend: Vercel, root directory 选择 `frontend`, 构建命令 `npm run build`, 安装命令 `npm ci`.
-- Backend: Hugging Face Spaces Docker, 使用仓库根目录的 `Dockerfile` 与 README 顶部 `sdk: docker` / `app_port: 7860`.
-- Redis: Upstash Redis 免费层, 将连接串填入 Hugging Face Space Secrets 的 `REDIS_URL`. Redis 不可用时系统会降级为无会话缓存, 核心生成能力仍可用.
+- Backend: Hugging Face Spaces Docker, 当前后端地址为 `https://ishowrelx5-specforge-api.hf.space`.
+- Redis: Upstash Redis 免费层, 将 TLS Redis 连接串填入 Hugging Face Space Secrets 的 `REDIS_URL`. Redis 不可用时系统会降级为无会话缓存, 核心生成能力仍可用.
 - Database: SQLite FTS5, 首次启动由 `SpecStore._migrate()` 自动初始化 `data/spec_store.db`. Hugging Face 免费 Space 的磁盘不保证长期持久化, 作品集 demo 可接受; 生产环境应迁移到托管数据库.
 
 ### 环境变量
@@ -186,13 +178,13 @@ Backend(Hugging Face Space Secrets):
 QWEN_API_KEY=your_qwen_api_key
 QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 QWEN_MODEL=qwen-plus
-REDIS_URL=redis://default:<password>@<host>:<port>
+REDIS_URL=rediss://default:<password>@<host>:6379
 ```
 
 Frontend(Vercel):
 
 ```bash
-BACKEND_URL=https://<your-hf-username>-specforge-api.hf.space
+BACKEND_URL=https://ishowrelx5-specforge-api.hf.space
 ```
 
 ### Docker Compose
@@ -214,17 +206,28 @@ docker compose logs -f frontend
 
 ### Hugging Face Spaces 后端
 
-1. 打开 Hugging Face, New Space, SDK 选择 Docker, Space name 建议 `specforge-api`.
-2. 将本仓库推送到 Space 仓库, 或在 Space 的 Files 页面上传根目录 `Dockerfile`, `README.md`, `requirements.txt`, `backend/`.
-3. 在 Space Settings -> Repository secrets 中设置 `QWEN_API_KEY`, `QWEN_BASE_URL`, `QWEN_MODEL`, 可选 `REDIS_URL`.
-4. Space 构建完成后访问 `https://<your-hf-username>-specforge-api.hf.space/api/v1/health`, 看到 `ok: true` 即可.
+1. 后端使用独立的 Hugging Face Space 仓库 `iShowRelx5/specForge-api`, 由本地 `hf-space/` 目录推送。
+2. Space SDK 选择 Docker, 监听端口 `7860`; `hf-space/README.md` 顶部保留 `sdk: docker` / `app_port: 7860` metadata.
+3. 在 Space Settings -> Repository secrets 中分别设置 `QWEN_API_KEY`, `QWEN_BASE_URL`, `QWEN_MODEL`, `REDIS_URL`.
+4. Space 构建完成后访问 `https://ishowrelx5-specforge-api.hf.space/api/v1/health`, 看到 `ok: true`, `redis.ok: true`, `env.has_qwen_key: true` 即可.
+
+常用推送命令:
+
+```powershell
+cd G:\1important\specForge\hf-space
+git add .
+git commit -m "deploy backend update"
+git push origin main
+```
 
 ### Vercel 前端
 
 1. Import Git Repository, root directory 填 `frontend`.
-2. Environment Variables 填 `BACKEND_URL=https://<your-hf-username>-specforge-api.hf.space`.
+2. Environment Variables 填 `BACKEND_URL=https://ishowrelx5-specforge-api.hf.space`.
 3. 部署后访问 `/api/health`, 确认能代理到后端.
 4. 部署成功后, 将本 README 第一行 Live Demo 替换为真实 Vercel URL; 在此之前不要填写会 404 的占位域名.
+
+前端推送到 GitHub `main` 后 Vercel 会自动部署; 如未触发, 在 Vercel -> Deployments 手动 Redeploy。
 
 ## 监控与日志
 
