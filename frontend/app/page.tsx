@@ -67,11 +67,17 @@ export default function Home() {
       try {
         const res = await fetch("/api/health", { cache: "no-store" });
         const data = (await res.json().catch(() => ({}))) as {
-          ok?: boolean; detail?: string; backendHealth?: { redis?: boolean };
+          ok?: boolean;
+          detail?: string;
+          backendHealth?: { redis?: boolean | { ok?: boolean }; redis_ok?: boolean };
         };
         if (res.ok && data.ok) {
           setStackOk(true);
-          if (data.backendHealth?.redis === false) {
+          const redisOk =
+            typeof data.backendHealth?.redis === "object"
+              ? data.backendHealth.redis.ok
+              : data.backendHealth?.redis ?? data.backendHealth?.redis_ok;
+          if (redisOk === false) {
             setStackHint("Redis 未连通：会话缓存不可用，但不影响核心功能。");
           }
         } else {

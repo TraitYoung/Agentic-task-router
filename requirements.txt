@@ -13,3 +13,4 @@ dashscope
 numpy
 markdown
 playwright
+psutil

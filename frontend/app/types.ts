@@ -4,7 +4,12 @@ export type TraceStepRow = {
   ts: string;
   duration_ms: number;
   keys_written: string[];
-  summary: Record<string, unknown>;
+  summary: Record<string, unknown> & {
+    _metrics?: {
+      estimated_tokens?: number;
+      memory_mb?: number;
+    };
+  };
 };
 
 export type Message = {

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from memory.spec_store import SpecStore
+from memory.spec_store import SpecStore, get_spec_store
 
 
 @pytest.fixture
@@ -159,3 +159,9 @@ class TestEmptyStore:
 
     def test_get_top_issues_empty_store(self, store):
         assert store.get_top_issues() == []
+
+
+def test_get_spec_store_returns_singleton_instance():
+    store = get_spec_store()
+    assert isinstance(store, SpecStore)
+    assert get_spec_store() is store

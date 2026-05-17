@@ -1,3 +1,5 @@
+🔗 Live Demo: 待部署到 Vercel 后替换为真实 URL
+
 # SpecForge — AI 软件工程规格锻造
 
 [![Python 3.13](https://img.shields.io/badge/Python-3.13-blue.svg)](https://www.python.org/)
@@ -157,3 +159,79 @@ cd frontend && npm install && npm run dev
 - 后端：`python -m compileall backend -q && pytest`
 - 前端：`cd frontend && npx tsc --noEmit && npm run build`
 - 架构细节见 [docs/项目结构与技术要点.md](docs/项目结构与技术要点.md)
+## 部署指南
+
+### 推荐拓扑
+
+- Frontend: Vercel, root directory 选择 `frontend`, 构建命令 `npm run build`, 安装命令 `npm ci`.
+- Backend: Render Web Service, 使用仓库根目录的 `render.yaml`, health check path 为 `/api/v1/health`.
+- Redis: Upstash Redis 免费层, 将连接串填入 Render 的 `REDIS_URL`. Redis 不可用时系统会降级为无会话缓存, 核心生成能力仍可用.
+- Database: SQLite FTS5, 首次启动由 `SpecStore._migrate()` 自动初始化 `data/spec_store.db`. Render 免费容器文件系统可能重启丢失, 作品集 demo 可接受; 生产环境应挂载持久卷或迁移到托管数据库.
+
+### 环境变量
+
+Backend(Render):
+
+```bash
+QWEN_API_KEY=your_qwen_api_key
+QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+QWEN_MODEL=qwen-plus
+REDIS_URL=redis://default:<password>@<host>:<port>
+```
+
+Frontend(Vercel):
+
+```bash
+BACKEND_URL=https://specforge-api.onrender.com
+```
+
+### Docker Compose
+
+本地或单机部署可以直接使用:
+
+```bash
+cp .env.example .env
+docker compose up --build -d
+curl http://127.0.0.1:8000/api/v1/health
+```
+
+日志查看:
+
+```bash
+docker compose logs -f api
+docker compose logs -f frontend
+```
+
+### Render 后端
+
+1. 在 Render 创建 Blueprint 或 Web Service, 连接本仓库.
+2. 选择 `render.yaml`; Dockerfile 为 `backend/Dockerfile`.
+3. 设置 `QWEN_API_KEY` 和可选 `REDIS_URL`.
+4. 部署后访问 `https://<service>.onrender.com/api/v1/health`, 看到 `ok: true` 即可.
+
+### Vercel 前端
+
+1. Import Git Repository, root directory 填 `frontend`.
+2. Environment Variables 填 `BACKEND_URL=https://<render-service>.onrender.com`.
+3. 部署后访问 `/api/health`, 确认能代理到后端.
+4. 部署成功后, 将本 README 第一行 Live Demo 替换为真实 Vercel URL; 在此之前不要填写会 404 的占位域名.
+
+## 监控与日志
+
+`GET /api/v1/health` 返回服务版本、启动时长、Redis/SQLite 状态、进程内存和关键环境变量是否存在。请求日志会记录 `trace_id`, path, status, duration_ms 和 client_ip; 流水线日志会记录每一步耗时、估算 token 和内存快照。
+
+![SpecForge observability trace](docs/assets/observability-trace.png)
+
+## 用户反馈 & 迭代
+
+以下为模拟试用反馈, 用来展示项目迭代闭环; 拿到真实同学/网友反馈后应替换为匿名真实记录。
+
+| Version | Feedback | Iteration |
+| --- | --- | --- |
+| v1.0 | 输出需求文档偏长, 面试准备时很难快速扫重点. | v1.1 增加摘要模式和 Trace 折叠面板, 先看结论再展开细节. |
+| v1.1 | 中断一周后回来, 不知道上次 Sprint 推到哪一步. | v1.2 增加 Redis 会话窗口和导出 JSONL, 支持恢复上下文. |
+| v1.2 | 后端没启动时只看到请求失败, 不知道是前端还是后端问题. | v1.3 增加 `/api/health` 与顶部状态提示, Redis 故障降级为黄色提醒. |
+
+## 容错设计
+
+完整说明见 [docs/RELIABILITY.md](docs/RELIABILITY.md). 当前版本覆盖 Pydantic 结构化校验、API 限流、Redis 降级、SQLite 写入失败保护、上下文预算裁剪、SSE 错误事件和生产健康检查。

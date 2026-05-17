@@ -261,6 +261,7 @@ def get_spec_store() -> SpecStore:
     if _store is None:
         _store = SpecStore()
         atexit.register(_shutdown_store)
+    return _store
 
 def _shutdown_store() -> None:
     global _store

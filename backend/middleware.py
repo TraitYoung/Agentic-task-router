@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections import defaultdict
 from typing import Callable
@@ -13,6 +14,8 @@ from typing import Callable
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
+
+logger = logging.getLogger("specforge.request")
 
 
 def _client_ip(request: Request) -> str:
@@ -78,3 +81,48 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         timestamps.append(now)
         self._cleanup()
         return await call_next(request)
+
+
+class RequestLogMiddleware(BaseHTTPMiddleware):
+    """Request-level access log with trace id and duration."""
+
+    async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        trace_id = request.headers.get("x-trace-id", "").strip() or "-"
+        path = request.url.path
+        method = request.method
+        ip = _client_ip(request)
+        started = time.perf_counter()
+        logger.info(
+            "request start: trace_id=%s method=%s path=%s client_ip=%s",
+            trace_id,
+            method,
+            path,
+            ip,
+        )
+        try:
+            response = await call_next(request)
+        except Exception:
+            duration_ms = (time.perf_counter() - started) * 1000
+            logger.exception(
+                "request failed: trace_id=%s method=%s path=%s duration_ms=%.2f client_ip=%s",
+                trace_id,
+                method,
+                path,
+                duration_ms,
+                ip,
+            )
+            raise
+
+        duration_ms = (time.perf_counter() - started) * 1000
+        logger.info(
+            "request done: trace_id=%s method=%s path=%s status=%d duration_ms=%.2f client_ip=%s",
+            trace_id,
+            method,
+            path,
+            response.status_code,
+            duration_ms,
+            ip,
+        )
+        if trace_id != "-":
+            response.headers.setdefault("X-Trace-Id", trace_id)
+        return response

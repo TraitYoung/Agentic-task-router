@@ -1,6 +1,8 @@
 from uuid import uuid4
 import asyncio
 import json
+import os
+import time
 from datetime import datetime, timezone
 from typing import List, Literal
 
@@ -10,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from config.step_model_routing import resolve_step_llm
-from middleware import RateLimitMiddleware
+from middleware import RateLimitMiddleware, RequestLogMiddleware
 from agents.workflow_pipelines import run_dev_pipeline, run_reverse_engineer, synthetic_intent_for_workflow
 from agents.dev_pipeline.orchestrator import run_dev_pipeline_stream, run_reverse_engineer_stream
 from memory.session_cache import SessionCache
@@ -26,6 +28,7 @@ setup_logging()
 logger = get_logger("specforge.main")
 
 app = FastAPI(title="SpecForge API", version="2.0.0")
+STARTED_AT = time.monotonic()
 
 app.add_middleware(
     CORSMiddleware,
@@ -35,14 +38,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(RateLimitMiddleware)
+app.add_middleware(RequestLogMiddleware)
 
 session_cache = SessionCache(ttl_seconds=3600, window_size=5)
 
 spec_store = get_spec_store()
 
 # 启动时校验关键配置
-import os as _os
-if not _os.getenv("QWEN_API_KEY"):
+if not os.getenv("QWEN_API_KEY"):
     logger.warning("QWEN_API_KEY not set — LLM calls will fail. Copy .env.example to .env and fill in your key.")
 
 
@@ -56,13 +59,43 @@ def _shutdown() -> None:
 @app.get("/api/v1/health")
 def api_health():
     """轻量探活:供 Next 开发代理与运维脚本探测；不调用大模型。"""
-    redis_ok = False
+    redis_status = {"ok": False, "error": ""}
     try:
         session_cache.client.ping()
-        redis_ok = True
+        redis_status["ok"] = True
+    except Exception as exc:
+        redis_status["error"] = str(exc)
+
+    sqlite_status = {"ok": False, "error": ""}
+    try:
+        spec_store._conn.execute("SELECT 1").fetchone()
+        sqlite_status["ok"] = True
+    except Exception as exc:
+        sqlite_status["error"] = str(exc)
+
+    return {
+        "ok": True,
+        "version": app.version,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "uptime_seconds": round(time.monotonic() - STARTED_AT, 2),
+        "redis": redis_status,
+        "redis_ok": redis_status["ok"],
+        "sqlite": sqlite_status,
+        "memory_mb": _memory_mb(),
+        "env": {
+            "has_qwen_key": bool(os.getenv("QWEN_API_KEY")),
+            "has_redis_url": bool(os.getenv("REDIS_URL")),
+        },
+    }
+
+
+def _memory_mb() -> float:
+    try:
+        import psutil
+
+        return round(psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024, 2)
     except Exception:
-        pass
-    return {"ok": True, "redis": redis_ok}
+        return 0.0
 
 
 Mode = Literal["spec", "review"]
@@ -319,6 +352,13 @@ async def chat_api(
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception(
+            "chat turn failed: trace_id=%s session_id=%s mode=%s input_len=%d",
+            trace_id,
+            session_id,
+            payload.mode,
+            len(payload.text),
+        )
         raise HTTPException(status_code=500, detail=f"turn failed: {exc}") from exc
 
     # 每次回复后写回 Redis，会话 TTL 维持 1 小时
@@ -360,6 +400,13 @@ async def chat_stream_api(
         except HTTPException:
             raise
         except Exception as exc:
+            logger.exception(
+                "chat stream failed: trace_id=%s session_id=%s mode=%s input_len=%d",
+                trace_id,
+                session_id,
+                payload.mode,
+                len(payload.text),
+            )
             yield f"data: {json.dumps({'type': 'error', 'detail': f'turn failed: {exc}'}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
