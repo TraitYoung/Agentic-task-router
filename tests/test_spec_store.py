@@ -59,6 +59,20 @@ class TestSpecSaveAndSearch:
         results = store.search_specs("量子计算")
         assert len(results) == 0
 
+    def test_search_with_punctuation_falls_back_to_like(self, store):
+        store.save_spec(
+            mode="spec",
+            profile="general",
+            user_text="我想做一个记事本软件",
+            goal="记事本软件",
+            user_stories=[],
+            modules=[],
+            full_summary="",
+        )
+        results = store.search_specs("记事本软件?")
+        assert len(results) == 1
+        assert results[0]["goal"] == "记事本软件"
+
     def test_search_respects_limit(self, store):
         for i in range(10):
             store.save_spec(

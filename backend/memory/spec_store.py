@@ -24,6 +24,10 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _like_query(query: str) -> str:
+    return query.strip().strip(' \t\r\n?？!！,，.。;；:："“”\'‘’`()（）[]【】{}<>《》')
+
+
 class SpecStore:
     """封装 SQLite FTS5：存储和检索软件工程规格与审查问题。"""
 
@@ -131,20 +135,24 @@ class SpecStore:
 
         # 先尝试 FTS5 MATCH
         fts_where = " AND ".join(["specs_fts MATCH ?"] + where_clauses)
-        rows = self._conn.execute(
-            f"""SELECT s.goal, s.user_stories, s.modules, s.full_summary, s.created_at
-                FROM specs_fts f
-                JOIN specs s ON s.id = f.rowid
-                WHERE {fts_where}
-                ORDER BY rank
-                LIMIT ?""",
-            (q, *params, limit),
-        ).fetchall()
+        try:
+            rows = self._conn.execute(
+                f"""SELECT s.goal, s.user_stories, s.modules, s.full_summary, s.created_at
+                    FROM specs_fts f
+                    JOIN specs s ON s.id = f.rowid
+                    WHERE {fts_where}
+                    ORDER BY rank
+                    LIMIT ?""",
+                (q, *params, limit),
+            ).fetchall()
+        except sqlite3.OperationalError as exc:
+            logger.warning("spec FTS search failed, falling back to LIKE: %s", exc)
+            rows = []
 
         # 中文分词 FTS5 无结果时回退 LIKE
         if not rows:
             like_where = " AND ".join(["s.goal LIKE ? OR s.user_text LIKE ?"] + where_clauses)
-            like_q = f"%{q}%"
+            like_q = f"%{_like_query(q) or q}%"
             like_params: list[Any] = [like_q, like_q]
             if mode:
                 like_params.append(mode)
@@ -209,20 +217,24 @@ class SpecStore:
 
         # 先尝试 FTS5 MATCH
         fts_where = " AND ".join(["review_issues_fts MATCH ?"] + where_clauses)
-        rows = self._conn.execute(
-            f"""SELECT i.issue_type, i.issue_text, i.suggestion, i.frequency, i.last_seen
-                FROM review_issues_fts f
-                JOIN review_issues i ON i.id = f.rowid
-                WHERE {fts_where}
-                ORDER BY i.frequency DESC, rank
-                LIMIT ?""",
-            (q, *params, limit),
-        ).fetchall()
+        try:
+            rows = self._conn.execute(
+                f"""SELECT i.issue_type, i.issue_text, i.suggestion, i.frequency, i.last_seen
+                    FROM review_issues_fts f
+                    JOIN review_issues i ON i.id = f.rowid
+                    WHERE {fts_where}
+                    ORDER BY i.frequency DESC, rank
+                    LIMIT ?""",
+                (q, *params, limit),
+            ).fetchall()
+        except sqlite3.OperationalError as exc:
+            logger.warning("issue FTS search failed, falling back to LIKE: %s", exc)
+            rows = []
 
         # 中文分词回退 LIKE
         if not rows:
             like_where = " AND ".join(["i.issue_text LIKE ? OR i.issue_type LIKE ?"] + where_clauses)
-            like_q = f"%{q}%"
+            like_q = f"%{_like_query(q) or q}%"
             like_params: list[Any] = [like_q, like_q]
             if profile:
                 like_params.append(profile)

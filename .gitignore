@@ -43,6 +43,7 @@ Thumbs.db
 
 # 开发堆栈运行状态
 .devstack/
+hf-space/.git/
 
 # 导出产物
 output/chats/
