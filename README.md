@@ -17,13 +17,9 @@
 
 **公开仓库：** [github.com/TraitYoung/specForge](https://github.com/TraitYoung/specForge) · **实现映射：** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
-**你用 AI 写出了能跑的 demo，但它能上线吗？**
+**Vibe coding 的 demo → 可维护的生产级项目。**
 
-Vibe coding 解决的是「从 0 到 1」，但现实中很多项目死在「从 1 到 n」。
-
-一个人有很好的想法，AI 帮他把第一步迈了出去。但项目很容易被打断：忙主业、处理别的事情，几天后回来，面对一堆没有说明文档、没有测试、没有 Sprint 规划的代码，已经不知道该从哪里继续。项目就这样卡在初期，非常可惜。
-
-SpecForge 解决的正是这个断层：它不是只帮你写第一行代码，而是在 vibe coding 的同时，自动生成需求规格、开发计划、测试方案和部署文档。这样即使中断两周回来，你也能看懂项目走到哪了，下一步该做什么。
+让 AI 写代码很快，但代码写完之后的麻烦事更多——没需求文档、没测试、架构说不清，中断几天回来就不记得做到哪了。SpecForge 在代码生成的同时补上工程规格：需求拆解、Sprint 规划、实现草案、测试方案，让项目能持续迭代而不是烂在初期。
 
 ## 工程亮点
 
@@ -48,10 +44,6 @@ SpecForge 解决的正是这个断层：它不是只帮你写第一行代码，�
 4. **测试与交付** — 测试用例、完成定义 (DoD)、CI/CD 提示、CHANGELOG、Sprint 回顾
 
 附带**可直接粘贴到 Cursor/Copilot 的实现 prompt**。
-
-### 履历/面试速查：设计要点 → 代码位置
-
-与常见简历描述一致的落点见 **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**（双模式流水线、五个 Pydantic 模型、并行阶段、画像检测、模型路由与上下文预算、SSE/Redis/Trace、RAG 等）。合并入 `main` 后可通过上方 **CI** 徽章查看 `pytest` + 前端 `tsc`/`build` 是否通过。
 
 ### 逆向审查 (Review)：代码 → 审查报告
 
@@ -234,16 +226,6 @@ git push origin main
 `GET /api/v1/health` 返回服务版本、启动时长、Redis/SQLite 状态、进程内存和关键环境变量是否存在。请求日志会记录 `trace_id`, path, status, duration_ms 和 client_ip; 流水线日志会记录每一步耗时、估算 token 和内存快照。
 
 ![SpecForge observability trace](docs/assets/observability-trace.png)
-
-## 用户反馈 & 迭代
-
-以下为模拟试用反馈, 用来展示项目迭代闭环; 拿到真实同学/网友反馈后应替换为匿名真实记录。
-
-| Version | Feedback | Iteration |
-| --- | --- | --- |
-| v1.0 | 输出需求文档偏长, 面试准备时很难快速扫重点. | v1.1 增加摘要模式和 Trace 折叠面板, 先看结论再展开细节. |
-| v1.1 | 中断一周后回来, 不知道上次 Sprint 推到哪一步. | v1.2 增加 Redis 会话窗口和导出 JSONL, 支持恢复上下文. |
-| v1.2 | 后端没启动时只看到请求失败, 不知道是前端还是后端问题. | v1.3 增加 `/api/health` 与顶部状态提示, Redis 故障降级为黄色提醒. |
 
 ## 容错设计
 
