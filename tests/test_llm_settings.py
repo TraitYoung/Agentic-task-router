@@ -39,10 +39,19 @@ def test_llm_step_model_uses_step_override(monkeypatch):
 
 
 def test_llm_max_tokens_per_step(monkeypatch):
-    assert llm_settings.llm_max_tokens("discovery") == 4096
+    assert llm_settings.llm_max_tokens("discovery") == 8192
     assert llm_settings.llm_max_tokens("merge") == 16384
     monkeypatch.setenv("LLM_MAX_TOKENS", "2048")
     assert llm_settings.llm_max_tokens("unknown_step") == 2048
+
+
+def test_llm_structured_thinking_override(monkeypatch):
+    monkeypatch.setenv("LLM_THINKING", "default")
+    monkeypatch.setenv("LLM_STRUCTURED_THINKING", "disabled")
+    kwargs = llm_settings.llm_structured_model_kwargs()
+    assert kwargs["extra_body"]["thinking"]["type"] == "disabled"
+    health = llm_settings.llm_env_health()
+    assert health["llm_structured_thinking"] == "disabled"
 
 
 def test_llm_thinking_disabled_via_env(monkeypatch):

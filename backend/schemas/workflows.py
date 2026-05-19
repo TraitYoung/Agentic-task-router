@@ -2,11 +2,17 @@
 
 from typing import List
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from schemas.coerce import cap_str, normalize_str_list
+
+_WORKFLOW_MODEL_CONFIG = ConfigDict(extra="ignore")
 
 
 class DevTaskSpec(BaseModel):
     """步骤 1：需求发现 — 对齐用户价值与可验收标准（教材式需求 + 敏捷用户故事）"""
+
+    model_config = _WORKFLOW_MODEL_CONFIG
 
     goal: str = Field(..., max_length=2000)
     constraints: List[str] = Field(default_factory=list, max_length=8)
@@ -28,37 +34,41 @@ class DevTaskSpec(BaseModel):
         description="可观察的成功信号或度量（非空话）",
     )
 
+    @field_validator("goal", mode="before")
+    @classmethod
+    def cap_goal(cls, v: object) -> object:
+        return cap_str(v, 2000, default="未指定目标")
+
+    @field_validator("stack_hint", "mvp_sprint_goal", mode="before")
+    @classmethod
+    def cap_short_text(cls, v: object) -> object:
+        return cap_str(v, 500)
+
     @field_validator("constraints", mode="before")
     @classmethod
     def cap_constraints(cls, v: object) -> object:
-        if not isinstance(v, list):
-            return v
-        return [str(x)[:400] for x in v[:8]]
+        return normalize_str_list(v, limit=8, item_max=400)
 
     @field_validator("acceptance_criteria", mode="before")
     @classmethod
     def cap_acceptance(cls, v: object) -> object:
-        if not isinstance(v, list):
-            return v
-        return [str(x)[:400] for x in v[:6]]
+        return normalize_str_list(v, limit=6, item_max=400)
 
     @field_validator("user_stories", mode="before")
     @classmethod
     def cap_user_stories(cls, v: object) -> object:
-        if not isinstance(v, list):
-            return v
-        return [str(x)[:500] for x in v[:6]]
+        return normalize_str_list(v, limit=6, item_max=500)
 
     @field_validator("measurable_outcomes", mode="before")
     @classmethod
     def cap_metrics(cls, v: object) -> object:
-        if not isinstance(v, list):
-            return v
-        return [str(x)[:300] for x in v[:5]]
+        return normalize_str_list(v, limit=5, item_max=300)
 
 
 class DevOutline(BaseModel):
     """步骤 2：迭代规划与设计 — 架构要点 + 有序 Sprint 待办（MVP 优先）"""
+
+    model_config = _WORKFLOW_MODEL_CONFIG
 
     modules: List[str] = Field(default_factory=list, max_length=12)
     data_flow: str = Field(default="", max_length=2000)
@@ -79,52 +89,66 @@ class DevOutline(BaseModel):
         description="需先验证未知点的技术探针（Spike）",
     )
 
+    @field_validator("data_flow", mode="before")
+    @classmethod
+    def cap_data_flow(cls, v: object) -> object:
+        return cap_str(v, 2000)
+
     @field_validator("modules", mode="before")
     @classmethod
     def cap_modules(cls, v: object) -> object:
-        if not isinstance(v, list):
-            return v
-        return [str(x)[:200] for x in v[:12]]
+        return normalize_str_list(v, limit=12, item_max=200)
 
     @field_validator("risks", mode="before")
     @classmethod
     def cap_risks(cls, v: object) -> object:
-        if not isinstance(v, list):
-            return v
-        return [str(x)[:400] for x in v[:6]]
+        return normalize_str_list(v, limit=6, item_max=400)
 
     @field_validator("backlog_parking_lot", mode="before")
     @classmethod
     def cap_parking(cls, v: object) -> object:
-        if not isinstance(v, list):
-            return v
-        return [str(x)[:400] for x in v[:8]]
+        return normalize_str_list(v, limit=8, item_max=400)
 
     @field_validator("technical_spikes", mode="before")
     @classmethod
     def cap_spikes(cls, v: object) -> object:
-        if not isinstance(v, list):
-            return v
-        return [str(x)[:400] for x in v[:5]]
+        return normalize_str_list(v, limit=5, item_max=400)
 
     @field_validator("backlog_mvp_ordered", mode="before")
     @classmethod
     def cap_mvp_backlog(cls, v: object) -> object:
-        if not isinstance(v, list):
-            return v
-        return [str(x)[:400] for x in v[:10]]
+        return normalize_str_list(v, limit=10, item_max=400)
 
 
 class DevCodeSketch(BaseModel):
     """步骤 3：实现草案（单文件或清晰模块草图）"""
 
-    language: str = Field(default="python", max_length=32)
+    model_config = _WORKFLOW_MODEL_CONFIG
+
+    language: str = Field(default="python", max_length=128)
     code: str = Field(default="", max_length=6000)
     notes: str = Field(default="", max_length=1500)
+
+    @field_validator("language", mode="before")
+    @classmethod
+    def cap_language(cls, v: object) -> object:
+        return cap_str(v, 128, default="python")
+
+    @field_validator("code", mode="before")
+    @classmethod
+    def cap_code(cls, v: object) -> object:
+        return cap_str(v, 6000)
+
+    @field_validator("notes", mode="before")
+    @classmethod
+    def cap_notes(cls, v: object) -> object:
+        return cap_str(v, 1500)
 
 
 class DevTestsChangelog(BaseModel):
     """步骤 4：测试、DoD、变更记录与短回顾 — 对齐「完成定义」与持续交付"""
+
+    model_config = _WORKFLOW_MODEL_CONFIG
 
     test_cases: List[str] = Field(default_factory=list, max_length=10)
     changelog_entry: str = Field(default="", max_length=2000)
@@ -144,30 +168,36 @@ class DevTestsChangelog(BaseModel):
         description="Sprint 回顾：一条改进建议或风险预警",
     )
 
+    @field_validator("changelog_entry", mode="before")
+    @classmethod
+    def cap_changelog(cls, v: object) -> object:
+        return cap_str(v, 2000)
+
+    @field_validator("sprint_retrospective_one_liner", mode="before")
+    @classmethod
+    def cap_retro(cls, v: object) -> object:
+        return cap_str(v, 500)
+
     @field_validator("test_cases", mode="before")
     @classmethod
     def cap_tests(cls, v: object) -> object:
-        if not isinstance(v, list):
-            return v
-        return [str(x)[:400] for x in v[:10]]
+        return normalize_str_list(v, limit=10, item_max=400)
 
     @field_validator("definition_of_done", mode="before")
     @classmethod
     def cap_dod(cls, v: object) -> object:
-        if not isinstance(v, list):
-            return v
-        return [str(x)[:400] for x in v[:8]]
+        return normalize_str_list(v, limit=8, item_max=400)
 
     @field_validator("ci_cd_notes", mode="before")
     @classmethod
     def cap_ci(cls, v: object) -> object:
-        if not isinstance(v, list):
-            return v
-        return [str(x)[:400] for x in v[:6]]
+        return normalize_str_list(v, limit=6, item_max=400)
 
 
 class ReverseEngineerSpec(BaseModel):
     """逆向工程：从现有代码推导需求、测试与改进点"""
+
+    model_config = _WORKFLOW_MODEL_CONFIG
 
     inferred_goal: str = Field(default="", max_length=2000, description="推测的业务目标")
     inferred_user_stories: List[str] = Field(default_factory=list, max_length=6, description="反向推导的用户故事")
@@ -176,33 +206,30 @@ class ReverseEngineerSpec(BaseModel):
     code_quality_issues: List[str] = Field(default_factory=list, max_length=8, description="代码质量问题")
     improvement_plan: List[str] = Field(default_factory=list, max_length=6, description="改进计划（按优先级）")
 
+    @field_validator("inferred_goal", mode="before")
+    @classmethod
+    def cap_inferred_goal(cls, v: object) -> object:
+        return cap_str(v, 2000)
+
     @field_validator("inferred_user_stories", mode="before")
     @classmethod
     def cap_stories(cls, v: object) -> object:
-        if not isinstance(v, list):
-            return v
-        return [str(x)[:500] for x in v[:6]]
+        return normalize_str_list(v, limit=6, item_max=500)
 
     @field_validator("missing_tests", mode="before")
     @classmethod
-    def cap_tests(cls, v: object) -> object:
-        if not isinstance(v, list):
-            return v
-        return [str(x)[:400] for x in v[:10]]
+    def cap_missing_tests(cls, v: object) -> object:
+        return normalize_str_list(v, limit=10, item_max=400)
 
     @field_validator("architecture_issues", "code_quality_issues", mode="before")
     @classmethod
     def cap_issues(cls, v: object) -> object:
-        if not isinstance(v, list):
-            return v
-        return [str(x)[:400] for x in v[:8]]
+        return normalize_str_list(v, limit=8, item_max=400)
 
     @field_validator("improvement_plan", mode="before")
     @classmethod
     def cap_improvements(cls, v: object) -> object:
-        if not isinstance(v, list):
-            return v
-        return [str(x)[:500] for x in v[:6]]
+        return normalize_str_list(v, limit=6, item_max=500)
 
 
 # ── Cursor / AI 编程工具 Prompt 生成 ──
@@ -247,4 +274,3 @@ def to_review_prompt(spec: ReverseEngineerSpec) -> str:
         f"## 参考：推测的需求\n{spec.inferred_goal}\n\n"
         "请按改进计划逐条重构代码，每完成一条验证对应测试是否通过。"
     )
-

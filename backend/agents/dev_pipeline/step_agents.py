@@ -23,6 +23,8 @@ from schemas.workflows import (
     ReverseEngineerSpec,
 )
 
+_LIST_RULE = "列表字段元素必须是字符串，禁止 {name, responsibility} 等嵌套对象。"
+
 
 @dataclass(frozen=True)
 class StepConfig:
@@ -69,6 +71,7 @@ REVERSE_ENGINEER_CFG = StepConfig(
     role="代码审查专家",
 )
 
+
 def _system(content: str) -> SystemMessage:
     return SystemMessage(content=prepare_system_content(content))
 
@@ -94,13 +97,18 @@ def _json_clip(obj: Any, max_chars: int) -> str:
     return clip_text(s, max_chars)
 
 
+def _structured_llm(cfg: StepConfig, fallback_llm):
+    return resolve_step_llm(cfg.step_id, fallback_llm, structured=True)
+
+
 def run_discovery_step(
     *, llm, raw_text: str, profile_injection: str, retrieval_context: str = ""
 ) -> DevTaskSpec:
-    step_llm = resolve_step_llm(DISCOVERY_CFG.step_id, llm)
+    step_llm = _structured_llm(DISCOVERY_CFG, llm)
     system_parts = [
         f"你是{DISCOVERY_CFG.role}。{profile_injection}",
         "只根据用户原文抽取结构化结果，填满 DevTaskSpec 各字段。",
+        _LIST_RULE,
         "- goal：业务目标一句话 + 必要背景。",
         "- acceptance_criteria：可测试、可验收。",
         "- user_stories：3~6 条，尽量 As a / I want / so that。",
@@ -116,11 +124,12 @@ def run_discovery_step(
             _system("\n".join(system_parts)),
             HumanMessage(content=f"产品负责人原始描述：\n{raw_text}"),
         ],
+        step_id=DISCOVERY_CFG.step_id,
     )
 
 
 def run_sprint_step(*, llm, discovery: DevTaskSpec, profile_focus: str) -> DevOutline:
-    step_llm = resolve_step_llm(SPRINT_CFG.step_id, llm)
+    step_llm = _structured_llm(SPRINT_CFG, llm)
     discovery_json = _json_clip(discovery.model_dump(), SPRINT_CFG.max_context_chars)
     return invoke_structured(
         step_llm,
@@ -129,13 +138,16 @@ def run_sprint_step(*, llm, discovery: DevTaskSpec, profile_focus: str) -> DevOu
             _system(
                 f"你是{SPRINT_CFG.role}。只依据上一份 JSON 产出 DevOutline。\n"
                 f"请额外强调：{profile_focus}。\n"
-                "- modules（≤12）/ data_flow / risks（≤6）：架构拆分与风险。\n"
+                f"{_LIST_RULE}\n"
+                "- modules（≤8，字符串数组）：每项一句，如「db: IndexedDB 封装」，单条≤60字。\n"
+                "- data_flow / risks（≤6）：架构拆分与风险。\n"
                 "- backlog_mvp_ordered（≤10）：本 Sprint 内按实现顺序排列任务。\n"
                 "- backlog_parking_lot（≤8）：明确延后条目。\n"
                 "- technical_spikes（≤5）：需先验证的技术探针。"
             ),
             HumanMessage(content=f"需求与故事 JSON：\n{discovery_json}"),
         ],
+        step_id=SPRINT_CFG.step_id,
     )
 
 
@@ -146,7 +158,7 @@ def run_implementation_step(
     sprint: DevOutline,
     profile_injection: str,
 ) -> DevCodeSketch:
-    step_llm = resolve_step_llm(IMPLEMENT_CFG.step_id, llm)
+    step_llm = _structured_llm(IMPLEMENT_CFG, llm)
     bundle = _json_clip(
         {"discovery": discovery.model_dump(), "sprint_design": sprint.model_dump()},
         IMPLEMENT_CFG.max_context_chars,
@@ -158,11 +170,14 @@ def run_implementation_step(
             _system(
                 f"你是{IMPLEMENT_CFG.role}。只收到 discovery+sprint_design 的 JSON。\n"
                 f"岗位注入：{profile_injection}\n"
+                f"{_LIST_RULE}\n"
                 "请给出单文件或清晰分区的代码草稿，体现 MVP 前两条 backlog 的核心路径；"
-                "language 标明语言；notes 写依赖、环境、后续重构点。"
+                "language 用简短技术栈名（如 TypeScript）；notes 写依赖、环境、后续重构点；"
+                "code 控制篇幅，避免超长导致 JSON 截断。"
             ),
             HumanMessage(content=f"上下文 JSON：\n{bundle}"),
         ],
+        step_id=IMPLEMENT_CFG.step_id,
     )
 
 
@@ -174,7 +189,7 @@ def run_delivery_step(
     sketch: DevCodeSketch,
     profile_focus: str,
 ) -> DevTestsChangelog:
-    step_llm = resolve_step_llm(DELIVERY_CFG.step_id, llm)
+    step_llm = _structured_llm(DELIVERY_CFG, llm)
     bundle = _json_clip(
         {
             "discovery": discovery.model_dump(),
@@ -190,6 +205,7 @@ def run_delivery_step(
             _system(
                 f"你是{DELIVERY_CFG.role}。基于 JSON 填写 DevTestsChangelog。\n"
                 f"岗位关注：{profile_focus}。\n"
+                f"{_LIST_RULE}\n"
                 "- test_cases：自动化或手测用例标题。\n"
                 "- definition_of_done：合入主干 DoD 条目。\n"
                 "- ci_cd_notes：流水线、lint、构建、环境变量提示。\n"
@@ -198,6 +214,7 @@ def run_delivery_step(
             ),
             HumanMessage(content=f"上下文 JSON：\n{bundle}"),
         ],
+        step_id=DELIVERY_CFG.step_id,
     )
 
 
@@ -220,7 +237,7 @@ def run_merge_step(
         },
         MERGE_CFG.max_context_chars,
     )
-    step_llm = resolve_step_llm(MERGE_CFG.step_id, llm)
+    step_llm = resolve_step_llm(MERGE_CFG.step_id, llm, structured=False)
     messages = [
         SystemMessage(
             content=(
@@ -252,10 +269,11 @@ def run_reverse_engineer_step(
     *, llm, code: str, profile_injection: str, retrieval_context: str = ""
 ) -> ReverseEngineerSpec:
     """逆向工程：从现有代码反推需求、测试缺失与改进计划。"""
-    step_llm = resolve_step_llm(REVERSE_ENGINEER_CFG.step_id, llm)
+    step_llm = _structured_llm(REVERSE_ENGINEER_CFG, llm)
     clipped_code = clip_text(code, WORKFLOW_STEP_JSON_MAX_CHARS * 2)
     system_parts = [
         f"你是{REVERSE_ENGINEER_CFG.role}。请审查以下代码，反向推导：",
+        _LIST_RULE,
         "1. inferred_goal：这段代码在解决什么业务问题？",
         "2. inferred_user_stories：可以反推出哪些用户故事？",
         "3. missing_tests：缺少哪些测试用例？",
@@ -275,5 +293,5 @@ def run_reverse_engineer_step(
             _system("\n".join(system_parts)),
             HumanMessage(content=f"待审查代码：\n```\n{clipped_code}\n```"),
         ],
+        step_id=REVERSE_ENGINEER_CFG.step_id,
     )
-

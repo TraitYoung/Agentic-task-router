@@ -253,11 +253,13 @@ export default function Home() {
           }
           if (msg.type === "error") {
             const detail = typeof msg.detail === "string" ? msg.detail : "后端生成失败";
+            const step = typeof msg.step === "string" && msg.step ? msg.step : "";
+            const label = step ? `步骤「${step}」失败` : "后端生成失败";
             setError(detail);
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === assistantMsgId
-                  ? { ...m, content: `后端生成失败：${detail}` }
+                  ? { ...m, content: `${label}：${detail}` }
                   : m
               )
             );

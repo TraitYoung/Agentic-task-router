@@ -1,16 +1,21 @@
 """structured_invoke：Moonshot JSON 提示模式与解析。"""
 
 import os
+from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 
+from config.structured_errors import StructuredStepError
 from config.structured_invoke import (
+    _balance_json_closers,
     _extract_json_text,
     _strip_thinking,
+    invoke_structured,
     prepare_system_content,
     uses_json_prompt_structured,
 )
+from schemas.workflows import DevTaskSpec
 
 
 @pytest.fixture(autouse=True)
@@ -54,3 +59,60 @@ def test_strip_thinking_before_json():
 
 def test_strip_thinking_helper():
     assert _strip_thinking("<thinking>a</thinking>\nhi") == "hi"
+
+
+def test_balance_json_closers():
+    broken = '{"goal": "x", "constraints": ["a"'
+    fixed = _balance_json_closers(broken)
+    parsed = __import__("json").loads(fixed)
+    assert parsed["goal"] == "x"
+
+
+def test_extract_json_balanced_object():
+    raw = '前缀说明 {"goal": "记账", "constraints": []} 后缀'
+    assert _extract_json_text(raw) == '{"goal": "记账", "constraints": []}'
+
+
+class _FakeLLM:
+    def __init__(self, responses: list[str], finish_reason: str = "stop"):
+        self._responses = responses
+        self.calls = 0
+        self._finish_reason = finish_reason
+
+    def invoke(self, messages):
+        self.calls += 1
+        text = self._responses[min(self.calls - 1, len(self._responses) - 1)]
+        return SimpleNamespace(
+            content=text,
+            response_metadata={"finish_reason": self._finish_reason},
+        )
+
+
+def test_invoke_structured_retries_on_invalid_json(monkeypatch):
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.moonshot.cn/v1")
+    monkeypatch.delenv("LLM_STRUCTURED_MODE", raising=False)
+    bad = "not valid json {{{"
+    good = '{"goal": "完成", "constraints": [], "stack_hint": "", "acceptance_criteria": [], "user_stories": [], "mvp_sprint_goal": "", "measurable_outcomes": []}'
+    llm = _FakeLLM([bad, good], finish_reason="length")
+    spec = invoke_structured(
+        llm,
+        DevTaskSpec,
+        [SystemMessage(content="test"), HumanMessage(content="hi")],
+        step_id="discovery",
+    )
+    assert spec.goal == "完成"
+    assert llm.calls == 2
+
+
+def test_invoke_structured_wraps_step_error(monkeypatch):
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.moonshot.cn/v1")
+    llm = _FakeLLM(['not json at all', 'still bad'])
+    with pytest.raises(StructuredStepError) as ei:
+        invoke_structured(
+            llm,
+            DevTaskSpec,
+            [SystemMessage(content="test"), HumanMessage(content="hi")],
+            step_id="discovery",
+        )
+    assert ei.value.step_id == "discovery"
+    assert ei.value.model_name == "DevTaskSpec"

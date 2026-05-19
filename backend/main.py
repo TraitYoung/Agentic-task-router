@@ -6,12 +6,18 @@ import time
 from datetime import datetime, timezone
 from typing import List, Literal
 
+from dotenv import load_dotenv
+from repo_paths import REPO_ROOT
+
+load_dotenv(REPO_ROOT / ".env", override=False)
+
 from fastapi import FastAPI, Header, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from config.llm_settings import has_llm_api_key, llm_env_health
+from config.structured_errors import StructuredStepError
 from config.step_model_routing import resolve_step_llm
 from middleware import RateLimitMiddleware, RequestLogMiddleware
 from agents.workflow_pipelines import run_dev_pipeline, run_reverse_engineer, synthetic_intent_for_workflow
@@ -21,7 +27,6 @@ from memory.spec_store import get_spec_store
 from schemas.protocols import TaskIntent
 from schemas.trace import TraceStep
 from core_logging import configure_stdio_utf8, get_logger, setup_logging
-from repo_paths import REPO_ROOT
 
 configure_stdio_utf8()
 setup_logging()
@@ -116,6 +121,12 @@ def _memory_mb() -> float:
 
 
 Mode = Literal["spec", "review"]
+
+
+def _turn_error_payload(exc: Exception) -> dict[str, str]:
+    if isinstance(exc, StructuredStepError):
+        return {"detail": exc.user_message(), "step": exc.step_id}
+    return {"detail": f"turn failed: {exc}", "step": ""}
 
 
 class ChatRequest(BaseModel):
@@ -377,7 +388,8 @@ async def chat_api(
             payload.mode,
             len(payload.text),
         )
-        raise HTTPException(status_code=500, detail=f"turn failed: {exc}") from exc
+        payload = _turn_error_payload(exc)
+        raise HTTPException(status_code=500, detail=payload["detail"]) from exc
 
     # 每次回复后写回 Redis，会话 TTL 维持 1 小时
     try:
@@ -425,7 +437,8 @@ async def chat_stream_api(
                 payload.mode,
                 len(payload.text),
             )
-            yield f"data: {json.dumps({'type': 'error', 'detail': f'turn failed: {exc}'}, ensure_ascii=False)}\n\n"
+            err = {"type": "error", **_turn_error_payload(exc)}
+            yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         event_gen(),

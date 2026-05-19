@@ -21,6 +21,7 @@ class TestStructuredJsonHint:
     """千问 json_object 模式要求 messages 含 json 关键字，防止线上 400。"""
 
     def test_dashscope_system_gets_json_hint(self, monkeypatch):
+        monkeypatch.delenv("LLM_STRUCTURED_MODE", raising=False)
         monkeypatch.setenv("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
         base = "你是需求教练。只根据用户原文抽取结构化结果。"
         combined = prepare_system_content(base)
@@ -116,6 +117,21 @@ class TestDevOutline:
     def test_field_validator_caps_item_length(self):
         outline = DevOutline(risks=["x" * 1000])
         assert len(outline.risks[0]) <= 400
+
+    def test_modules_object_list_coerced_to_strings(self):
+        outline = DevOutline.model_validate(
+            {
+                "modules": [
+                    {
+                        "name": "app-shell",
+                        "responsibility": "SPA 入口与 PWA 壳",
+                    },
+                    {"name": "db", "responsibility": "IndexedDB 封装"},
+                ],
+            }
+        )
+        assert outline.modules[0] == "app-shell: SPA 入口与 PWA 壳"
+        assert outline.modules[1].startswith("db:")
 
 
 class TestDevTestsChangelog:

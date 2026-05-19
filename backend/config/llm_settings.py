@@ -19,12 +19,12 @@ _STEP_MODEL_ENV: dict[str, tuple[str, ...]] = {
 
 # Kimi K2.6：结构化 JSON 步骤适中，merge 汇总可更长
 _STEP_MAX_TOKENS: dict[str, int] = {
-    "discovery": 4096,
-    "sprint_design": 4096,
+    "discovery": 8192,
+    "sprint_design": 8192,
     "implementation_sketch": 8192,
     "delivery_review": 8192,
     "merge": 16384,
-    "reverse_engineer": 4096,
+    "reverse_engineer": 8192,
 }
 
 
@@ -100,6 +100,30 @@ def llm_model_kwargs() -> dict[str, Any]:
     return {}
 
 
+def llm_structured_thinking_mode() -> str | None:
+    """
+    结构化 JSON 步骤的思考模式。
+    未设置 LLM_STRUCTURED_THINKING 时继承 LLM_THINKING；设为 disabled 可为 JSON 留出更多输出 token。
+    """
+    raw = os.getenv("LLM_STRUCTURED_THINKING", "").strip().lower()
+    if not raw:
+        return None
+    if raw in ("disabled", "off", "false", "0"):
+        return "disabled"
+    if raw in ("default", "on", "enabled", "true", "1"):
+        return "default"
+    return None
+
+
+def llm_structured_model_kwargs() -> dict[str, Any]:
+    mode = llm_structured_thinking_mode()
+    if mode is None:
+        return llm_model_kwargs()
+    if mode == "disabled":
+        return {"extra_body": {"thinking": {"type": "disabled"}}}
+    return {}
+
+
 def llm_provider_label() -> str:
     base = llm_base_url().lower()
     if "moonshot" in base:
@@ -121,5 +145,6 @@ def llm_env_health() -> dict[str, object]:
         "llm_base_url": llm_base_url(),
         "llm_provider": llm_provider_label(),
         "llm_thinking": llm_thinking_mode(),
+        "llm_structured_thinking": llm_structured_thinking_mode() or llm_thinking_mode(),
         "llm_request_timeout": llm_request_timeout(),
     }
