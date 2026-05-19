@@ -76,12 +76,12 @@ class TestDevTaskSpec:
         assert len(spec.constraints) <= 8
         assert len(spec.acceptance_criteria) <= 6
 
-    def test_max_length_rejects_excess(self):
-        with pytest.raises(Exception):
-            DevTaskSpec(
-                goal="test",
-                constraints=[f"constraint_{i}" for i in range(20)],
-            )
+    def test_excess_list_items_are_truncated(self):
+        spec = DevTaskSpec(
+            goal="test",
+            constraints=[f"constraint_{i}" for i in range(20)],
+        )
+        assert len(spec.constraints) == 8
 
     def test_field_validator_caps_item_length(self):
         spec = DevTaskSpec(
@@ -99,9 +99,17 @@ class TestDevOutline:
         assert outline.modules == []
         assert outline.backlog_mvp_ordered == []
 
-    def test_max_length_rejects_excess(self):
-        with pytest.raises(Exception):
-            DevOutline(modules=[f"mod_{i}" for i in range(20)])
+    def test_excess_list_items_are_truncated(self):
+        outline = DevOutline(
+            modules=[f"mod_{i}" for i in range(20)],
+            risks=[f"risk_{i}" for i in range(8)],
+            backlog_mvp_ordered=[f"b{i}" for i in range(12)],
+            backlog_parking_lot=[f"p{i}" for i in range(11)],
+        )
+        assert len(outline.modules) == 12
+        assert len(outline.risks) == 6
+        assert len(outline.backlog_mvp_ordered) == 10
+        assert len(outline.backlog_parking_lot) == 8
 
     def test_field_validator_caps_item_length(self):
         outline = DevOutline(risks=["x" * 1000])
@@ -119,12 +127,12 @@ class TestReverseEngineerSpec:
         spec = ReverseEngineerSpec(inferred_goal="分析这段代码")
         assert spec.inferred_goal == "分析这段代码"
 
-    def test_max_length_rejects_excess(self):
-        with pytest.raises(Exception):
-            ReverseEngineerSpec(
-                inferred_goal="test",
-                inferred_user_stories=[f"story_{i}" for i in range(20)],
-            )
+    def test_excess_list_items_are_truncated(self):
+        spec = ReverseEngineerSpec(
+            inferred_goal="test",
+            inferred_user_stories=[f"story_{i}" for i in range(20)],
+        )
+        assert len(spec.inferred_user_stories) == 6
 
     def test_field_validator_caps_item_length(self):
         spec = ReverseEngineerSpec(

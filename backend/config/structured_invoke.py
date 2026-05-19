@@ -62,11 +62,21 @@ def _extract_json_text(text: str) -> str:
     return raw
 
 
+def _list_max_items(field) -> str:
+    for meta in field.metadata:
+        max_len = getattr(meta, "max_length", None)
+        if max_len is not None:
+            return f"最多 {max_len} 条"
+    return ""
+
+
 def _compact_schema_hint(model_cls: type[BaseModel]) -> str:
-    lines = [f"请只输出一个 JSON 对象，须包含下列字段（不要 markdown、不要额外说明）："]
+    lines = ["请只输出一个 JSON 对象（不要 markdown、不要额外说明）。各列表不得超过条数上限："]
     for name, field in model_cls.model_fields.items():
         hint = field.description or str(getattr(field.annotation, "__name__", field.annotation))
-        lines.append(f"- {name}: {hint}")
+        cap = _list_max_items(field)
+        suffix = f"（{cap}）" if cap else ""
+        lines.append(f"- {name}{suffix}: {hint}")
     lines.append(
         f"\n示例结构（值由你填写）：{json.dumps({k: '...' for k in model_cls.model_fields}, ensure_ascii=False)}"
     )

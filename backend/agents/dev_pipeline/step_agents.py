@@ -127,10 +127,10 @@ def run_sprint_step(*, llm, discovery: DevTaskSpec, profile_focus: str) -> DevOu
             _system(
                 f"你是{SPRINT_CFG.role}。只依据上一份 JSON 产出 DevOutline。\n"
                 f"请额外强调：{profile_focus}。\n"
-                "- modules / data_flow / risks：架构拆分与风险。\n"
-                "- backlog_mvp_ordered：本 Sprint 内按实现顺序排列任务。\n"
-                "- backlog_parking_lot：明确延后条目。\n"
-                "- technical_spikes：需先验证的技术探针。"
+                "- modules（≤12）/ data_flow / risks（≤6）：架构拆分与风险。\n"
+                "- backlog_mvp_ordered（≤10）：本 Sprint 内按实现顺序排列任务。\n"
+                "- backlog_parking_lot（≤8）：明确延后条目。\n"
+                "- technical_spikes（≤5）：需先验证的技术探针。"
             ),
             HumanMessage(content=f"需求与故事 JSON：\n{discovery_json}"),
         ],

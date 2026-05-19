@@ -28,24 +28,32 @@ class DevTaskSpec(BaseModel):
         description="可观察的成功信号或度量（非空话）",
     )
 
-    @field_validator("constraints")
+    @field_validator("constraints", mode="before")
     @classmethod
-    def cap_constraints(cls, v: List[str]) -> List[str]:
+    def cap_constraints(cls, v: object) -> object:
+        if not isinstance(v, list):
+            return v
         return [str(x)[:400] for x in v[:8]]
 
-    @field_validator("acceptance_criteria")
+    @field_validator("acceptance_criteria", mode="before")
     @classmethod
-    def cap_acceptance(cls, v: List[str]) -> List[str]:
+    def cap_acceptance(cls, v: object) -> object:
+        if not isinstance(v, list):
+            return v
         return [str(x)[:400] for x in v[:6]]
 
-    @field_validator("user_stories")
+    @field_validator("user_stories", mode="before")
     @classmethod
-    def cap_user_stories(cls, v: List[str]) -> List[str]:
+    def cap_user_stories(cls, v: object) -> object:
+        if not isinstance(v, list):
+            return v
         return [str(x)[:500] for x in v[:6]]
 
-    @field_validator("measurable_outcomes")
+    @field_validator("measurable_outcomes", mode="before")
     @classmethod
-    def cap_metrics(cls, v: List[str]) -> List[str]:
+    def cap_metrics(cls, v: object) -> object:
+        if not isinstance(v, list):
+            return v
         return [str(x)[:300] for x in v[:5]]
 
 
@@ -71,29 +79,39 @@ class DevOutline(BaseModel):
         description="需先验证未知点的技术探针（Spike）",
     )
 
-    @field_validator("modules")
+    @field_validator("modules", mode="before")
     @classmethod
-    def cap_modules(cls, v: List[str]) -> List[str]:
+    def cap_modules(cls, v: object) -> object:
+        if not isinstance(v, list):
+            return v
         return [str(x)[:200] for x in v[:12]]
 
-    @field_validator("risks")
+    @field_validator("risks", mode="before")
     @classmethod
-    def cap_risks(cls, v: List[str]) -> List[str]:
+    def cap_risks(cls, v: object) -> object:
+        if not isinstance(v, list):
+            return v
         return [str(x)[:400] for x in v[:6]]
 
-    @field_validator("backlog_parking_lot")
+    @field_validator("backlog_parking_lot", mode="before")
     @classmethod
-    def cap_parking(cls, v: List[str]) -> List[str]:
+    def cap_parking(cls, v: object) -> object:
+        if not isinstance(v, list):
+            return v
         return [str(x)[:400] for x in v[:8]]
 
-    @field_validator("technical_spikes")
+    @field_validator("technical_spikes", mode="before")
     @classmethod
-    def cap_spikes(cls, v: List[str]) -> List[str]:
+    def cap_spikes(cls, v: object) -> object:
+        if not isinstance(v, list):
+            return v
         return [str(x)[:400] for x in v[:5]]
 
-    @field_validator("backlog_mvp_ordered")
+    @field_validator("backlog_mvp_ordered", mode="before")
     @classmethod
-    def cap_mvp_backlog(cls, v: List[str]) -> List[str]:
+    def cap_mvp_backlog(cls, v: object) -> object:
+        if not isinstance(v, list):
+            return v
         return [str(x)[:400] for x in v[:10]]
 
 
@@ -126,15 +144,26 @@ class DevTestsChangelog(BaseModel):
         description="Sprint 回顾：一条改进建议或风险预警",
     )
 
-    @field_validator("test_cases")
+    @field_validator("test_cases", mode="before")
     @classmethod
-    def cap_tests(cls, v: List[str]) -> List[str]:
+    def cap_tests(cls, v: object) -> object:
+        if not isinstance(v, list):
+            return v
         return [str(x)[:400] for x in v[:10]]
 
-    @field_validator("definition_of_done", "ci_cd_notes")
+    @field_validator("definition_of_done", mode="before")
     @classmethod
-    def cap_dod_ci(cls, v: List[str]) -> List[str]:
+    def cap_dod(cls, v: object) -> object:
+        if not isinstance(v, list):
+            return v
         return [str(x)[:400] for x in v[:8]]
+
+    @field_validator("ci_cd_notes", mode="before")
+    @classmethod
+    def cap_ci(cls, v: object) -> object:
+        if not isinstance(v, list):
+            return v
+        return [str(x)[:400] for x in v[:6]]
 
 
 class ReverseEngineerSpec(BaseModel):
@@ -147,24 +176,32 @@ class ReverseEngineerSpec(BaseModel):
     code_quality_issues: List[str] = Field(default_factory=list, max_length=8, description="代码质量问题")
     improvement_plan: List[str] = Field(default_factory=list, max_length=6, description="改进计划（按优先级）")
 
-    @field_validator("inferred_user_stories")
+    @field_validator("inferred_user_stories", mode="before")
     @classmethod
-    def cap_stories(cls, v: List[str]) -> List[str]:
+    def cap_stories(cls, v: object) -> object:
+        if not isinstance(v, list):
+            return v
         return [str(x)[:500] for x in v[:6]]
 
-    @field_validator("missing_tests")
+    @field_validator("missing_tests", mode="before")
     @classmethod
-    def cap_tests(cls, v: List[str]) -> List[str]:
+    def cap_tests(cls, v: object) -> object:
+        if not isinstance(v, list):
+            return v
         return [str(x)[:400] for x in v[:10]]
 
-    @field_validator("architecture_issues", "code_quality_issues")
+    @field_validator("architecture_issues", "code_quality_issues", mode="before")
     @classmethod
-    def cap_issues(cls, v: List[str]) -> List[str]:
+    def cap_issues(cls, v: object) -> object:
+        if not isinstance(v, list):
+            return v
         return [str(x)[:400] for x in v[:8]]
 
-    @field_validator("improvement_plan")
+    @field_validator("improvement_plan", mode="before")
     @classmethod
-    def cap_improvements(cls, v: List[str]) -> List[str]:
+    def cap_improvements(cls, v: object) -> object:
+        if not isinstance(v, list):
+            return v
         return [str(x)[:500] for x in v[:6]]
 
 
