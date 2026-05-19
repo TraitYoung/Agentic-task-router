@@ -31,6 +31,6 @@ def resolve_step_llm(step_id: str, fallback_llm):
     if cache_key in _CACHE:
         return _CACHE[cache_key]
 
-    inst = ChatOpenAI(model=model, api_key=api_key, base_url=base_url)
+    inst = ChatOpenAI(model=model, api_key=api_key, base_url=base_url, timeout=180, max_retries=2)
     _CACHE[cache_key] = inst
     return inst

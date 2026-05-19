@@ -261,6 +261,7 @@ async def _execute_turn_stream(payload: ChatRequest, session_id: str):
 
     trace_payload = [TraceStep.model_validate(s).model_dump() for s in trace_raw]
 
+    yield {"type": "reply", "content": reply}
     yield {
         "type": "meta",
         "session_id": session_id,

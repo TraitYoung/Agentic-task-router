@@ -14,6 +14,7 @@ logger = logging.getLogger("specforge.step_agents")
 
 from config.context_budget import WORKFLOW_STEP_JSON_MAX_CHARS, clip_text
 from config.step_model_routing import resolve_step_llm
+from config.structured_invoke import invoke_structured
 from schemas.workflows import (
     DevCodeSketch,
     DevOutline,
@@ -88,7 +89,6 @@ def run_discovery_step(
     *, llm, raw_text: str, profile_injection: str, retrieval_context: str = ""
 ) -> DevTaskSpec:
     step_llm = resolve_step_llm(DISCOVERY_CFG.step_id, llm)
-    model = step_llm.with_structured_output(DevTaskSpec)
     system_parts = [
         f"你是{DISCOVERY_CFG.role}。{profile_injection}",
         "只根据用户原文抽取结构化结果，填满 DevTaskSpec 各字段。",
@@ -100,19 +100,22 @@ def run_discovery_step(
     ]
     if retrieval_context:
         system_parts.append(f"\n参考历史类似方案（可借鉴思路但勿照搬）：\n{retrieval_context}")
-    return model.invoke(
+    return invoke_structured(
+        step_llm,
+        DevTaskSpec,
         [
             SystemMessage(content=_append_json_output_hint("\n".join(system_parts))),
             HumanMessage(content=f"产品负责人原始描述：\n{raw_text}"),
-        ]
+        ],
     )
 
 
 def run_sprint_step(*, llm, discovery: DevTaskSpec, profile_focus: str) -> DevOutline:
     step_llm = resolve_step_llm(SPRINT_CFG.step_id, llm)
-    model = step_llm.with_structured_output(DevOutline)
     discovery_json = _json_clip(discovery.model_dump(), SPRINT_CFG.max_context_chars)
-    return model.invoke(
+    return invoke_structured(
+        step_llm,
+        DevOutline,
         [
             SystemMessage(
                 content=_append_json_output_hint(
@@ -125,7 +128,7 @@ def run_sprint_step(*, llm, discovery: DevTaskSpec, profile_focus: str) -> DevOu
                 )
             ),
             HumanMessage(content=f"需求与故事 JSON：\n{discovery_json}"),
-        ]
+        ],
     )
 
 
@@ -137,12 +140,13 @@ def run_implementation_step(
     profile_injection: str,
 ) -> DevCodeSketch:
     step_llm = resolve_step_llm(IMPLEMENT_CFG.step_id, llm)
-    model = step_llm.with_structured_output(DevCodeSketch)
     bundle = _json_clip(
         {"discovery": discovery.model_dump(), "sprint_design": sprint.model_dump()},
         IMPLEMENT_CFG.max_context_chars,
     )
-    return model.invoke(
+    return invoke_structured(
+        step_llm,
+        DevCodeSketch,
         [
             SystemMessage(
                 content=_append_json_output_hint(
@@ -153,7 +157,7 @@ def run_implementation_step(
                 )
             ),
             HumanMessage(content=f"上下文 JSON：\n{bundle}"),
-        ]
+        ],
     )
 
 
@@ -166,7 +170,6 @@ def run_delivery_step(
     profile_focus: str,
 ) -> DevTestsChangelog:
     step_llm = resolve_step_llm(DELIVERY_CFG.step_id, llm)
-    model = step_llm.with_structured_output(DevTestsChangelog)
     bundle = _json_clip(
         {
             "discovery": discovery.model_dump(),
@@ -175,7 +178,9 @@ def run_delivery_step(
         },
         DELIVERY_CFG.max_context_chars,
     )
-    return model.invoke(
+    return invoke_structured(
+        step_llm,
+        DevTestsChangelog,
         [
             SystemMessage(
                 content=_append_json_output_hint(
@@ -189,7 +194,7 @@ def run_delivery_step(
                 )
             ),
             HumanMessage(content=f"上下文 JSON：\n{bundle}"),
-        ]
+        ],
     )
 
 
@@ -245,7 +250,6 @@ def run_reverse_engineer_step(
 ) -> ReverseEngineerSpec:
     """逆向工程：从现有代码反推需求、测试缺失与改进计划。"""
     step_llm = resolve_step_llm(REVERSE_ENGINEER_CFG.step_id, llm)
-    model = step_llm.with_structured_output(ReverseEngineerSpec)
     clipped_code = clip_text(code, WORKFLOW_STEP_JSON_MAX_CHARS * 2)
     system_parts = [
         f"你是{REVERSE_ENGINEER_CFG.role}。请审查以下代码，反向推导：",
@@ -261,10 +265,12 @@ def run_reverse_engineer_step(
         system_parts.append(
             f"\n已知高频问题模式（请特别关注是否匹配以下问题，如匹配请引用）：\n{retrieval_context}"
         )
-    return model.invoke(
+    return invoke_structured(
+        step_llm,
+        ReverseEngineerSpec,
         [
             SystemMessage(content=_append_json_output_hint("\n".join(system_parts))),
             HumanMessage(content=f"待审查代码：\n```\n{clipped_code}\n```"),
-        ]
+        ],
     )
 

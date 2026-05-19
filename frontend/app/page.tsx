@@ -200,19 +200,34 @@ export default function Home() {
           }
           if (msg.type === "delta") {
             setMessages((prev) =>
+              prev.map((m) => {
+                if (m.id !== assistantMsgId) return m;
+                const token = String(msg.content ?? "");
+                const base = m.content.startsWith("> ") ? "" : m.content;
+                return { ...m, content: base + token };
+              })
+            );
+          }
+          if (msg.type === "status") {
+            const statusLine = `> ${msg.text as string}`;
+            setMessages((prev) =>
               prev.map((m) =>
                 m.id === assistantMsgId
-                  ? { ...m, content: m.content + (msg.content as string) }
+                  ? {
+                      ...m,
+                      content: m.content.startsWith("> ")
+                        ? statusLine
+                        : `${statusLine}\n\n${m.content}`,
+                    }
                   : m
               )
             );
           }
-          if (msg.type === "status") {
+          if (msg.type === "reply") {
+            const full = String(msg.content ?? "");
             setMessages((prev) =>
               prev.map((m) =>
-                m.id === assistantMsgId && !m.content
-                  ? { ...m, content: `> ${msg.text as string}` }
-                  : m
+                m.id === assistantMsgId ? { ...m, content: full } : m
               )
             );
           }
