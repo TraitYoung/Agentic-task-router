@@ -30,7 +30,7 @@
 - **步骤级模型路由**：发现/设计/实现/交付/合并各步骤可独立配置不同 LLM 模型，按步骤粒度调配成本与能力
 - **阶段 2 并行执行**：实现草案与测试交付通过 ThreadPoolExecutor 并行运行，降低端到端延迟
 - **RAG 检索增强**：正向自动检索历史相似规格作为参考上下文，逆向积累高频代码问题模式，越用越准
-- **SSE 流式输出**：前端打字机效果 + 全链路 Trace 折叠面板，附带可直接粘贴到 Cursor 的实现/测试/重构 Prompt
+- **SSE 流式输出**：聊天气泡仅展示短摘要；完整 **SPEC.md / REVIEW.md** 实现包落盘至 `output/chats/`，支持一键复制 Cursor Prompt 或下载
 
 ## 两种工作模式
 
@@ -43,7 +43,7 @@
 3. **实现草案** — MVP 核心路径代码草稿（含语言标识与依赖说明）
 4. **测试与交付** — 测试用例、完成定义 (DoD)、CI/CD 提示、CHANGELOG、Sprint 回顾
 
-附带**可直接粘贴到 Cursor/Copilot 的实现 prompt**。
+聊天气泡为**摘要**；完整包含 **Implementation / Test Prompt**、代码草稿与 Release Notes，保存为 `output/chats/*_SPEC.md`，可在界面复制或下载后拖入 Cursor/Copilot。
 
 ### 逆向审查 (Review)：代码 → 审查报告
 

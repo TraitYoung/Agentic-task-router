@@ -19,6 +19,9 @@ export type Message = {
   ts: string;
   traceId?: string;
   traceSteps?: TraceStepRow[];
+  artifactMd?: string;
+  artifactPath?: string;
+  artifactFilename?: string;
 };
 
 export type UiMode = "spec" | "review";

@@ -217,14 +217,7 @@ export default function Home() {
             continue;
           }
           if (msg.type === "delta") {
-            setMessages((prev) =>
-              prev.map((m) => {
-                if (m.id !== assistantMsgId) return m;
-                const token = String(msg.content ?? "");
-                const base = m.content.startsWith("> ") ? "" : m.content;
-                return { ...m, content: base + token };
-              })
-            );
+            continue;
           }
           if (msg.type === "status") {
             const step = normalizePipelineStep(String(msg.step ?? ""));
@@ -232,12 +225,19 @@ export default function Home() {
             const statusLine = `> ${msg.text as string}`;
             setMessages((prev) =>
               prev.map((m) =>
+                m.id === assistantMsgId ? { ...m, content: statusLine } : m
+              )
+            );
+          }
+          if (msg.type === "artifact") {
+            setMessages((prev) =>
+              prev.map((m) =>
                 m.id === assistantMsgId
                   ? {
                       ...m,
-                      content: m.content.startsWith("> ")
-                        ? statusLine
-                        : `${statusLine}\n\n${m.content}`,
+                      artifactMd: String(msg.content ?? ""),
+                      artifactPath: String(msg.file_path ?? ""),
+                      artifactFilename: String(msg.filename ?? "SPEC.md"),
                     }
                   : m
               )
@@ -482,6 +482,7 @@ export default function Home() {
                     isStreaming={streamingId === msg.id}
                     elapsed={elapsed}
                     stageLabel={pipelineStepLabel(pipelineStep, mode)}
+                    mode={mode}
                   />
                 )
               )}

@@ -143,6 +143,9 @@ class ChatResponse(BaseModel):
     intent: TaskIntent
     trace_id: str
     trace: list[TraceStep]
+    artifact_md: str | None = None
+    artifact_path: str | None = None
+    artifact_filename: str | None = None
 
 
 class ChatExportItem(BaseModel):
@@ -162,7 +165,7 @@ class ChatHistoryResponse(BaseModel):
     turns: List[ChatExportItem]
 
 
-def _execute_turn(payload: ChatRequest, session_id: str) -> tuple[str, TaskIntent, list, str]:
+def _execute_turn(payload: ChatRequest, session_id: str):
     store = get_spec_store()
     retrieval_context = ""
 
@@ -174,7 +177,7 @@ def _execute_turn(payload: ChatRequest, session_id: str) -> tuple[str, TaskInten
                 for i in top_issues
             )
         llm = resolve_step_llm("reverse_engineer", None)
-        reply_raw, trace_raw = run_reverse_engineer(payload.text, llm, retrieval_context=retrieval_context)
+        pipeline = run_reverse_engineer(payload.text, llm, retrieval_context=retrieval_context)
     else:
         past_specs = store.search_specs(payload.text, mode="spec", limit=3)
         if past_specs:
@@ -189,9 +192,9 @@ def _execute_turn(payload: ChatRequest, session_id: str) -> tuple[str, TaskInten
                 )
             retrieval_context = "\n".join(parts)
         llm = resolve_step_llm("discovery", None)
-        reply_raw, trace_raw = run_dev_pipeline(payload.text, llm, retrieval_context=retrieval_context)
+        pipeline = run_dev_pipeline(payload.text, llm, retrieval_context=retrieval_context)
 
-    # 从 trace 中提取 profile，保存到知识库
+    trace_raw = pipeline.steps
     profile = _extract_profile(trace_raw)
     try:
         if payload.mode == "review":
@@ -202,8 +205,16 @@ def _execute_turn(payload: ChatRequest, session_id: str) -> tuple[str, TaskInten
         logger.warning("save to spec_store failed: %s", exc)
 
     intent = synthetic_intent_for_workflow(payload.text)
-    reply = f"[specforge]: {reply_raw}"
-    return reply, intent, trace_raw, payload.mode
+    reply = pipeline.summary
+    return (
+        reply,
+        intent,
+        trace_raw,
+        payload.mode,
+        pipeline.artifact_md,
+        pipeline.artifact_path,
+        pipeline.artifact_filename,
+    )
 
 
 async def _execute_turn_stream(payload: ChatRequest, session_id: str):
@@ -262,9 +273,9 @@ async def _execute_turn_stream(payload: ChatRequest, session_id: str):
                         break
                 break
 
-    reply_raw, trace_raw = future.result()
+    pipeline = future.result()
+    trace_raw = pipeline.steps
 
-    # 保存到知识库 + Redis
     profile = _extract_profile(trace_raw)
     try:
         if payload.mode == "review":
@@ -276,16 +287,25 @@ async def _execute_turn_stream(payload: ChatRequest, session_id: str):
 
     try:
         intent = synthetic_intent_for_workflow(payload.text)
-        reply = f"[specforge]: {reply_raw}"
-        session_cache.append_turn(session_id=session_id, user_text=payload.text, assistant_text=reply)
+        session_cache.append_turn(
+            session_id=session_id,
+            user_text=payload.text,
+            assistant_text=pipeline.summary,
+        )
     except Exception as exc:
         logger.warning("Redis append_turn failed: %s", exc)
         intent = synthetic_intent_for_workflow(payload.text)
-        reply = f"[specforge]: {reply_raw}"
 
     trace_payload = [TraceStep.model_validate(s).model_dump() for s in trace_raw]
 
-    yield {"type": "reply", "content": reply_raw}
+    yield {
+        "type": "artifact",
+        "format": "markdown",
+        "filename": pipeline.artifact_filename,
+        "file_path": pipeline.artifact_path,
+        "content": pipeline.artifact_md,
+    }
+    yield {"type": "reply", "content": pipeline.summary}
     yield {
         "type": "meta",
         "session_id": session_id,
@@ -377,7 +397,9 @@ async def chat_api(
     response.headers["X-Trace-Id"] = trace_id
 
     try:
-        reply, intent, trace_raw, _active = _execute_turn(payload, session_id)
+        reply, intent, trace_raw, _mode, artifact_md, artifact_path, artifact_filename = _execute_turn(
+            payload, session_id
+        )
     except HTTPException:
         raise
     except Exception as exc:
@@ -388,10 +410,9 @@ async def chat_api(
             payload.mode,
             len(payload.text),
         )
-        payload = _turn_error_payload(exc)
-        raise HTTPException(status_code=500, detail=payload["detail"]) from exc
+        err = _turn_error_payload(exc)
+        raise HTTPException(status_code=500, detail=err["detail"]) from exc
 
-    # 每次回复后写回 Redis，会话 TTL 维持 1 小时
     try:
         session_cache.append_turn(
             session_id=session_id,
@@ -408,6 +429,9 @@ async def chat_api(
         intent=intent,
         trace_id=trace_id,
         trace=trace,
+        artifact_md=artifact_md,
+        artifact_path=artifact_path,
+        artifact_filename=artifact_filename,
     )
 
 
