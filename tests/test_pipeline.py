@@ -2,10 +2,7 @@
 
 import pytest
 
-from agents.dev_pipeline.step_agents import (
-    STRUCTURED_JSON_OUTPUT_HINT,
-    _append_json_output_hint,
-)
+from config.structured_invoke import prepare_system_content
 from config.context_budget import clip_text, WORKFLOW_USER_TEXT_MAX_CHARS
 from prompts.dev_pipeline_profiles import detect_dev_profile, GENERAL_PROFILE, WEB_APP_PROFILE, API_SERVICE_PROFILE
 from schemas.workflows import (
@@ -23,12 +20,10 @@ from schemas.workflows import (
 class TestStructuredJsonHint:
     """千问 json_object 模式要求 messages 含 json 关键字，防止线上 400。"""
 
-    def test_hint_contains_json_keyword(self):
-        assert "json" in STRUCTURED_JSON_OUTPUT_HINT.lower()
-
-    def test_append_adds_hint_to_system_prompt(self):
+    def test_dashscope_system_gets_json_hint(self, monkeypatch):
+        monkeypatch.setenv("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
         base = "你是需求教练。只根据用户原文抽取结构化结果。"
-        combined = _append_json_output_hint(base)
+        combined = prepare_system_content(base)
         assert "json" in combined.lower()
         assert base in combined
 

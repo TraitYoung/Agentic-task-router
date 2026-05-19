@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { canSendMessage, shouldSendOnEnter } from "./chatComposer";
 import type { TraceStepRow, Message, UiMode } from "./types";
-import { safeParseJson } from "./lib";
+import { parseSseEvent } from "./lib";
 import { AssistantBubble, UserBubble } from "./Bubble";
 import { Composer } from "./Composer";
 import { WelcomeHero } from "./WelcomeHero";
@@ -186,16 +186,16 @@ export default function Home() {
         const parts = buf.split("\n\n");
         buf = parts.pop() ?? "";
         for (const part of parts) {
-          const line = part.trim();
-          if (!line.startsWith("data:")) continue;
-          const parsed = safeParseJson(line.slice(5).trim());
-          if (!parsed || typeof parsed !== "object") continue;
-          const msg = parsed as Record<string, unknown>;
+          const msg = parseSseEvent(part);
+          if (!msg) continue;
 
-          if ("session_id" in msg && "intent" in msg) {
+          if (msg.type === "meta") {
             if (msg.trace_id) collectedTraceId = String(msg.trace_id);
             if (msg.trace && Array.isArray(msg.trace))
               collectedTrace = msg.trace as TraceStepRow[];
+            continue;
+          }
+          if (msg.type === "done") {
             continue;
           }
           if (msg.type === "delta") {

@@ -14,7 +14,7 @@ logger = logging.getLogger("specforge.step_agents")
 
 from config.context_budget import WORKFLOW_STEP_JSON_MAX_CHARS, clip_text
 from config.step_model_routing import resolve_step_llm
-from config.structured_invoke import invoke_structured
+from config.structured_invoke import invoke_structured, prepare_system_content
 from schemas.workflows import (
     DevCodeSketch,
     DevOutline,
@@ -69,15 +69,22 @@ REVERSE_ENGINEER_CFG = StepConfig(
     role="代码审查专家",
 )
 
-# DashScope / 千问兼容模式要求：使用 response_format=json_object 时，
-# messages 中须包含 "json" 字样，否则返回 400 InvalidParameter。
-STRUCTURED_JSON_OUTPUT_HINT = (
-    "请仅以 JSON 对象格式返回结果，字段须与 schema 一致；不要输出 markdown 代码块或额外说明。"
-)
+def _system(content: str) -> SystemMessage:
+    return SystemMessage(content=prepare_system_content(content))
 
 
-def _append_json_output_hint(system_content: str) -> str:
-    return f"{system_content.rstrip()}\n\n{STRUCTURED_JSON_OUTPUT_HINT}"
+def _message_content(chunk: Any) -> str:
+    """LangChain AIMessageChunk.content 可能是 str 或 list。"""
+    raw = getattr(chunk, "content", chunk)
+    if isinstance(raw, list):
+        parts: list[str] = []
+        for block in raw:
+            if isinstance(block, dict):
+                parts.append(str(block.get("text", "")))
+            else:
+                parts.append(str(block))
+        return "".join(parts)
+    return str(raw) if raw is not None else ""
 
 
 def _json_clip(obj: Any, max_chars: int) -> str:
@@ -104,7 +111,7 @@ def run_discovery_step(
         step_llm,
         DevTaskSpec,
         [
-            SystemMessage(content=_append_json_output_hint("\n".join(system_parts))),
+            _system("\n".join(system_parts)),
             HumanMessage(content=f"产品负责人原始描述：\n{raw_text}"),
         ],
     )
@@ -117,15 +124,13 @@ def run_sprint_step(*, llm, discovery: DevTaskSpec, profile_focus: str) -> DevOu
         step_llm,
         DevOutline,
         [
-            SystemMessage(
-                content=_append_json_output_hint(
-                    f"你是{SPRINT_CFG.role}。只依据上一份 JSON 产出 DevOutline。\n"
-                    f"请额外强调：{profile_focus}。\n"
-                    "- modules / data_flow / risks：架构拆分与风险。\n"
-                    "- backlog_mvp_ordered：本 Sprint 内按实现顺序排列任务。\n"
-                    "- backlog_parking_lot：明确延后条目。\n"
-                    "- technical_spikes：需先验证的技术探针。"
-                )
+            _system(
+                f"你是{SPRINT_CFG.role}。只依据上一份 JSON 产出 DevOutline。\n"
+                f"请额外强调：{profile_focus}。\n"
+                "- modules / data_flow / risks：架构拆分与风险。\n"
+                "- backlog_mvp_ordered：本 Sprint 内按实现顺序排列任务。\n"
+                "- backlog_parking_lot：明确延后条目。\n"
+                "- technical_spikes：需先验证的技术探针。"
             ),
             HumanMessage(content=f"需求与故事 JSON：\n{discovery_json}"),
         ],
@@ -148,13 +153,11 @@ def run_implementation_step(
         step_llm,
         DevCodeSketch,
         [
-            SystemMessage(
-                content=_append_json_output_hint(
-                    f"你是{IMPLEMENT_CFG.role}。只收到 discovery+sprint_design 的 JSON。\n"
-                    f"岗位注入：{profile_injection}\n"
-                    "请给出单文件或清晰分区的代码草稿，体现 MVP 前两条 backlog 的核心路径；"
-                    "language 标明语言；notes 写依赖、环境、后续重构点。"
-                )
+            _system(
+                f"你是{IMPLEMENT_CFG.role}。只收到 discovery+sprint_design 的 JSON。\n"
+                f"岗位注入：{profile_injection}\n"
+                "请给出单文件或清晰分区的代码草稿，体现 MVP 前两条 backlog 的核心路径；"
+                "language 标明语言；notes 写依赖、环境、后续重构点。"
             ),
             HumanMessage(content=f"上下文 JSON：\n{bundle}"),
         ],
@@ -182,16 +185,14 @@ def run_delivery_step(
         step_llm,
         DevTestsChangelog,
         [
-            SystemMessage(
-                content=_append_json_output_hint(
-                    f"你是{DELIVERY_CFG.role}。基于 JSON 填写 DevTestsChangelog。\n"
-                    f"岗位关注：{profile_focus}。\n"
-                    "- test_cases：自动化或手测用例标题。\n"
-                    "- definition_of_done：合入主干 DoD 条目。\n"
-                    "- ci_cd_notes：流水线、lint、构建、环境变量提示。\n"
-                    "- changelog_entry：面向同事的变更条目。\n"
-                    "- sprint_retrospective_one_liner：一句回顾。"
-                )
+            _system(
+                f"你是{DELIVERY_CFG.role}。基于 JSON 填写 DevTestsChangelog。\n"
+                f"岗位关注：{profile_focus}。\n"
+                "- test_cases：自动化或手测用例标题。\n"
+                "- definition_of_done：合入主干 DoD 条目。\n"
+                "- ci_cd_notes：流水线、lint、构建、环境变量提示。\n"
+                "- changelog_entry：面向同事的变更条目。\n"
+                "- sprint_retrospective_one_liner：一句回顾。"
             ),
             HumanMessage(content=f"上下文 JSON：\n{bundle}"),
         ],
@@ -231,7 +232,7 @@ def run_merge_step(
     if stream_callback is not None:
         full: list[str] = []
         for chunk in step_llm.stream(messages):
-            token = str(chunk.content) if hasattr(chunk, "content") else str(chunk)
+            token = _message_content(chunk)
             if token:
                 stream_callback(token)
                 full.append(token)
@@ -240,7 +241,7 @@ def run_merge_step(
         return result
 
     rsp = step_llm.invoke(messages)
-    result = str(rsp.content).strip()
+    result = _message_content(rsp).strip()
     logger.info("merge step done: chars=%d", len(result))
     return result
 
@@ -269,7 +270,7 @@ def run_reverse_engineer_step(
         step_llm,
         ReverseEngineerSpec,
         [
-            SystemMessage(content=_append_json_output_hint("\n".join(system_parts))),
+            _system("\n".join(system_parts)),
             HumanMessage(content=f"待审查代码：\n```\n{clipped_code}\n```"),
         ],
     )
