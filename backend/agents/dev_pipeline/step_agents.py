@@ -68,6 +68,16 @@ REVERSE_ENGINEER_CFG = StepConfig(
     role="代码审查专家",
 )
 
+# DashScope / 千问兼容模式要求：使用 response_format=json_object 时，
+# messages 中须包含 "json" 字样，否则返回 400 InvalidParameter。
+STRUCTURED_JSON_OUTPUT_HINT = (
+    "请仅以 JSON 对象格式返回结果，字段须与 schema 一致；不要输出 markdown 代码块或额外说明。"
+)
+
+
+def _append_json_output_hint(system_content: str) -> str:
+    return f"{system_content.rstrip()}\n\n{STRUCTURED_JSON_OUTPUT_HINT}"
+
 
 def _json_clip(obj: Any, max_chars: int) -> str:
     s = json.dumps(obj, ensure_ascii=False) if not isinstance(obj, str) else obj
@@ -92,7 +102,7 @@ def run_discovery_step(
         system_parts.append(f"\n参考历史类似方案（可借鉴思路但勿照搬）：\n{retrieval_context}")
     return model.invoke(
         [
-            SystemMessage(content="\n".join(system_parts)),
+            SystemMessage(content=_append_json_output_hint("\n".join(system_parts))),
             HumanMessage(content=f"产品负责人原始描述：\n{raw_text}"),
         ]
     )
@@ -105,7 +115,7 @@ def run_sprint_step(*, llm, discovery: DevTaskSpec, profile_focus: str) -> DevOu
     return model.invoke(
         [
             SystemMessage(
-                content=(
+                content=_append_json_output_hint(
                     f"你是{SPRINT_CFG.role}。只依据上一份 JSON 产出 DevOutline。\n"
                     f"请额外强调：{profile_focus}。\n"
                     "- modules / data_flow / risks：架构拆分与风险。\n"
@@ -135,7 +145,7 @@ def run_implementation_step(
     return model.invoke(
         [
             SystemMessage(
-                content=(
+                content=_append_json_output_hint(
                     f"你是{IMPLEMENT_CFG.role}。只收到 discovery+sprint_design 的 JSON。\n"
                     f"岗位注入：{profile_injection}\n"
                     "请给出单文件或清晰分区的代码草稿，体现 MVP 前两条 backlog 的核心路径；"
@@ -168,7 +178,7 @@ def run_delivery_step(
     return model.invoke(
         [
             SystemMessage(
-                content=(
+                content=_append_json_output_hint(
                     f"你是{DELIVERY_CFG.role}。基于 JSON 填写 DevTestsChangelog。\n"
                     f"岗位关注：{profile_focus}。\n"
                     "- test_cases：自动化或手测用例标题。\n"
@@ -253,7 +263,7 @@ def run_reverse_engineer_step(
         )
     return model.invoke(
         [
-            SystemMessage(content="\n".join(system_parts)),
+            SystemMessage(content=_append_json_output_hint("\n".join(system_parts))),
             HumanMessage(content=f"待审查代码：\n```\n{clipped_code}\n```"),
         ]
     )
