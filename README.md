@@ -9,7 +9,7 @@
 [![Pydantic v2](https://img.shields.io/badge/Protocol-Pydantic_V2-red.svg)](https://docs.pydantic.dev/)
 [![Next.js 16](https://img.shields.io/badge/Frontend-Next.js_16-black.svg)](https://nextjs.org/)
 [![LangChain](https://img.shields.io/badge/LLM-LangChain-orange.svg)](https://www.langchain.com/)
-[![Qwen](https://img.shields.io/badge/Model-Qwen-purple.svg)](https://tongyi.aliyun.com/)
+[![Kimi](https://img.shields.io/badge/Model-Kimi_K2.6-purple.svg)](https://platform.moonshot.cn/)
 [![Redis](https://img.shields.io/badge/Cache-Redis-red.svg)](https://redis.io/)
 [![TypeScript](https://img.shields.io/badge/Lang-TypeScript-3178c6.svg)](https://www.typescriptlang.org/)
 [![Tailwind CSS](https://img.shields.io/badge/CSS-Tailwind_v4-06b6d4.svg)](https://tailwindcss.com/)
@@ -72,11 +72,13 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-`.env` 中至少配置：
+`.env` 中至少配置（默认 **Moonshot Kimi 2.6**）：
 ```bash
-QWEN_API_KEY=你的千问API密钥
-QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+LLM_API_KEY=你的_Moonshot_API_Key
+LLM_BASE_URL=https://api.moonshot.cn/v1
+LLM_MODEL=kimi-k2.6
 ```
+Key 在 [platform.moonshot.cn](https://platform.moonshot.cn/) 创建；海外 `LLM_BASE_URL` 用 `https://api.moonshot.ai/v1`。旧版 `QWEN_*` 仍兼容。
 
 **2. 启动服务**
 
@@ -167,9 +169,9 @@ cd frontend && npm install && npm run dev
 Backend(Hugging Face Space Secrets):
 
 ```bash
-QWEN_API_KEY=your_qwen_api_key
-QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-QWEN_MODEL=qwen-plus
+LLM_API_KEY=your_moonshot_api_key
+LLM_BASE_URL=https://api.moonshot.cn/v1
+LLM_MODEL=kimi-k2.6
 REDIS_URL=rediss://default:<password>@<host>:6379
 ```
 
@@ -200,8 +202,15 @@ docker compose logs -f frontend
 
 1. 后端使用独立的 Hugging Face Space 仓库 `iShowRelx5/specForge-api`, 由本地 `hf-space/` 目录推送。
 2. Space SDK 选择 Docker, 监听端口 `7860`; `hf-space/README.md` 顶部保留 `sdk: docker` / `app_port: 7860` metadata.
-3. 在 Space Settings -> Repository secrets 中分别设置 `QWEN_API_KEY`, `QWEN_BASE_URL`, `QWEN_MODEL`, `REDIS_URL`.
-4. Space 构建完成后访问 `https://ishowrelx5-specforge-api.hf.space/api/v1/health`, 看到 `ok: true`, `redis.ok: true`, `env.has_qwen_key: true` 即可.
+3. 在 Space **Settings → Repository secrets** 中设置：
+   | Secret | 值 |
+   |--------|-----|
+   | `LLM_API_KEY` | Moonshot 控制台 API Key |
+   | `LLM_BASE_URL` | `https://api.moonshot.cn/v1`（海外：`https://api.moonshot.ai/v1`） |
+   | `LLM_MODEL` | `kimi-k2.6` |
+   | `REDIS_URL` | Upstash 等 Redis 连接串（可选） |
+   旧 Secret 名 `QWEN_*` 仍可用，建议改名为 `LLM_*`。
+4. 保存后 **Restart Space**。访问 health 应看到 `env.has_llm_key: true`、`env.llm_model: "kimi-k2.6"`。
 
 常用推送命令:
 

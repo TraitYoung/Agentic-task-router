@@ -22,4 +22,7 @@ def test_health_reports_operational_fields_when_redis_is_down(monkeypatch):
     assert "redis unavailable" in body["redis"]["error"]
     assert body["sqlite"]["ok"] is True
     assert body["memory_mb"] >= 0
-    assert isinstance(body["env"]["has_qwen_key"], bool)
+    assert isinstance(body["env"]["has_llm_key"], bool)
+    assert body["env"]["llm_model"] == "kimi-k2.6"
+    assert body["env"]["llm_base_url"] == "https://api.moonshot.cn/v1"
+    assert "has_qwen_key" not in body["env"]

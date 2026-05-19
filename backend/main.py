@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from config.llm_settings import has_llm_api_key, llm_env_health
 from config.step_model_routing import resolve_step_llm
 from middleware import RateLimitMiddleware, RequestLogMiddleware
 from agents.workflow_pipelines import run_dev_pipeline, run_reverse_engineer, synthetic_intent_for_workflow
@@ -44,9 +45,12 @@ session_cache = SessionCache(ttl_seconds=3600, window_size=5)
 
 spec_store = get_spec_store()
 
-# 启动时校验关键配置
-if not os.getenv("QWEN_API_KEY"):
-    logger.warning("QWEN_API_KEY not set — LLM calls will fail. Copy .env.example to .env and fill in your key.")
+# 启动时校验关键配置（LLM_API_KEY，见 .env.example）
+if not has_llm_api_key():
+    logger.warning(
+        "LLM_API_KEY not set — LLM calls will fail. "
+        "Copy .env.example to .env and set LLM_API_KEY (Moonshot Kimi or other OpenAI-compatible provider)."
+    )
 
 
 @app.on_event("shutdown")
@@ -83,7 +87,7 @@ def api_health():
         "sqlite": sqlite_status,
         "memory_mb": _memory_mb(),
         "env": {
-            "has_qwen_key": bool(os.getenv("QWEN_API_KEY")),
+            **llm_env_health(),
             "has_redis_url": bool(os.getenv("REDIS_URL")),
         },
     }

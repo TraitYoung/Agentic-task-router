@@ -15,7 +15,7 @@ SpecForge 的 demo 不只展示 happy path。上线后需要能回答三个问�
 | SQLite FTS 查询语法错误 | FTS5 `MATCH` 遇到特殊字符会抛 `OperationalError`; 当前实现记录 warning 并回退到 `LIKE` 检索. | 后端 warning: `spec FTS search failed, falling back to LIKE`; 用户请求继续进入 LLM 流水线. |
 | 单任务 token 超预算 | `context_budget.clip_text()` 对用户输入和阶段 JSON 摘要做最大长度裁剪. | Trace summary 保留 `_metrics.estimated_tokens`, README 截图展示总量. |
 | SSE 中断 | 后端 stream 捕获异常并发送 `{type:"error"}` 事件; 前端保留已收到内容并显示错误. | 浏览器错误气泡和后端 exception 日志. |
-| 缺少 API key | 启动时 warning; health 中 `env.has_qwen_key=false`; 真正调用 LLM 时失败. | Hugging Face Space logs 可见 `QWEN_API_KEY not set`, health 可提前发现. |
+| 缺少 API key | 启动时 warning; health 中 `env.has_llm_key=false`; 真正调用 LLM 时失败. | Space logs 可见 `LLM_API_KEY not set`, health 可提前发现. |
 
 ## 观测接口
 
@@ -29,7 +29,7 @@ SpecForge 的 demo 不只展示 happy path。上线后需要能回答三个问�
   "redis": { "ok": false, "error": "connection refused" },
   "sqlite": { "ok": true, "error": "" },
   "memory_mb": 96.4,
-  "env": { "has_qwen_key": true, "has_redis_url": true }
+  "env": { "has_llm_key": true, "llm_model": "kimi-k2.6", "has_redis_url": true }
 }
 ```
 
