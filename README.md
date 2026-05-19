@@ -172,8 +172,12 @@ Backend(Hugging Face Space Secrets):
 LLM_API_KEY=your_moonshot_api_key
 LLM_BASE_URL=https://api.moonshot.cn/v1
 LLM_MODEL=kimi-k2.6
+LLM_STRUCTURED_MODE=json_prompt
+LLM_REQUEST_TIMEOUT=300
 REDIS_URL=rediss://default:<password>@<host>:6379
 ```
+
+Kimi K2.6 默认开启思考模式，端到端生成可能需数分钟；可选 `LLM_THINKING=disabled` 提速。
 
 Frontend(Vercel):
 
@@ -215,8 +219,9 @@ docker compose logs -f frontend
 常用推送命令:
 
 ```powershell
-cd G:\1important\specForge\hf-space
-git add .
+.\scripts\sync_hf_space.ps1
+cd hf-space
+git add -A
 git commit -m "deploy backend update"
 git push origin main
 ```

@@ -6,7 +6,14 @@ from typing import Dict
 
 from langchain_openai import ChatOpenAI
 
-from config.llm_settings import llm_api_key, llm_base_url, llm_step_model
+from config.llm_settings import (
+    llm_api_key,
+    llm_base_url,
+    llm_max_tokens,
+    llm_model_kwargs,
+    llm_request_timeout,
+    llm_step_model,
+)
 
 _CACHE: Dict[str, ChatOpenAI] = {}
 
@@ -27,10 +34,20 @@ def resolve_step_llm(step_id: str, fallback_llm):
     if not api_key:
         return fallback_llm
 
-    cache_key = f"{model}|{base_url}"
+    max_tokens = llm_max_tokens(step_id)
+    model_kwargs = llm_model_kwargs()
+    cache_key = f"{model}|{base_url}|{step_id}|{max_tokens}|{llm_request_timeout()}"
     if cache_key in _CACHE:
         return _CACHE[cache_key]
 
-    inst = ChatOpenAI(model=model, api_key=api_key, base_url=base_url, timeout=180, max_retries=2)
+    inst = ChatOpenAI(
+        model=model,
+        api_key=api_key,
+        base_url=base_url,
+        timeout=llm_request_timeout(),
+        max_retries=2,
+        max_tokens=max_tokens,
+        model_kwargs=model_kwargs,
+    )
     _CACHE[cache_key] = inst
     return inst

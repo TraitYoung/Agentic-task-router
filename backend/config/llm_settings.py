@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 
 DEFAULT_LLM_BASE_URL = "https://api.moonshot.cn/v1"
 DEFAULT_LLM_MODEL = "kimi-k2.6"
+DEFAULT_LLM_REQUEST_TIMEOUT = 300
 
 _STEP_MODEL_ENV: dict[str, tuple[str, ...]] = {
     "discovery": ("LLM_DISCOVERY_MODEL", "AX_LLM_DISCOVERY_MODEL"),
@@ -14,6 +16,26 @@ _STEP_MODEL_ENV: dict[str, tuple[str, ...]] = {
     "delivery_review": ("LLM_DELIVERY_MODEL", "AX_LLM_DELIVERY_MODEL"),
     "merge": ("LLM_MERGE_MODEL", "AX_LLM_MERGE_MODEL"),
 }
+
+# Kimi K2.6：结构化 JSON 步骤适中，merge 汇总可更长
+_STEP_MAX_TOKENS: dict[str, int] = {
+    "discovery": 4096,
+    "sprint_design": 4096,
+    "implementation_sketch": 8192,
+    "delivery_review": 8192,
+    "merge": 16384,
+    "reverse_engineer": 4096,
+}
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
 
 
 def _first_nonempty(*names: str, default: str = "") -> str:
@@ -54,6 +76,39 @@ def llm_step_model(step_id: str) -> str:
     return _first_nonempty(*keys, default=default)
 
 
+def llm_request_timeout() -> int:
+    return _env_int("LLM_REQUEST_TIMEOUT", DEFAULT_LLM_REQUEST_TIMEOUT)
+
+
+def llm_max_tokens(step_id: str) -> int:
+    default = _env_int("LLM_MAX_TOKENS", 8192)
+    return _STEP_MAX_TOKENS.get(step_id, default)
+
+
+def llm_thinking_mode() -> str:
+    """default | disabled — 默认保持 Kimi 官方思考模式开启。"""
+    mode = os.getenv("LLM_THINKING", "default").strip().lower()
+    if mode in ("disabled", "off", "false", "0"):
+        return "disabled"
+    return "default"
+
+
+def llm_model_kwargs() -> dict[str, Any]:
+    """传给 ChatOpenAI 的 model_kwargs；temperature/top_p 使用模型默认，不显式覆盖。"""
+    if llm_thinking_mode() == "disabled":
+        return {"extra_body": {"thinking": {"type": "disabled"}}}
+    return {}
+
+
+def llm_provider_label() -> str:
+    base = llm_base_url().lower()
+    if "moonshot" in base:
+        return "moonshot"
+    if "dashscope" in base:
+        return "dashscope"
+    return "openai_compatible"
+
+
 def has_llm_api_key() -> bool:
     return bool(llm_api_key())
 
@@ -64,4 +119,7 @@ def llm_env_health() -> dict[str, object]:
         "has_llm_key": has_llm_api_key(),
         "llm_model": llm_default_model(),
         "llm_base_url": llm_base_url(),
+        "llm_provider": llm_provider_label(),
+        "llm_thinking": llm_thinking_mode(),
+        "llm_request_timeout": llm_request_timeout(),
     }

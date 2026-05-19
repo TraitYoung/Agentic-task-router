@@ -9,12 +9,16 @@ export function AssistantBubble({
   msg,
   isStreaming,
   elapsed,
+  stageLabel,
 }: {
   msg: Message;
   isStreaming: boolean;
   elapsed: number;
+  stageLabel?: string;
 }) {
   const [copied, setCopied] = useState(false);
+  const isStatusOnly = msg.content.startsWith("> ") && isStreaming;
+  const showThinkingHint = isStreaming && elapsed > 30;
 
   async function onCopy() {
     if (!msg.content) return;
@@ -27,16 +31,28 @@ export function AssistantBubble({
     <div className="group flex flex-col gap-1 max-w-[80%]">
       <div className="relative rounded-2xl rounded-tl-sm bg-zinc-100 px-4 py-3 text-sm text-zinc-900 leading-relaxed">
         {isStreaming && !msg.content ? (
-          <span className="flex items-center gap-1.5 text-zinc-400">
-            <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce [animation-delay:0ms]" />
-            <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce [animation-delay:150ms]" />
-            <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce [animation-delay:300ms]" />
-            {elapsed > 2 && (
-              <span className="ml-1 text-[11px]">等待中 {elapsed}s...</span>
+          <span className="flex flex-col gap-2 text-zinc-400">
+            <span className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce [animation-delay:0ms]" />
+              <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce [animation-delay:150ms]" />
+              <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce [animation-delay:300ms]" />
+              <span className="ml-1 text-[11px]">
+                {stageLabel || "准备中"}
+                {elapsed > 2 ? ` · ${elapsed}s` : ""}
+              </span>
+            </span>
+            {showThinkingHint && (
+              <span className="text-[11px] text-amber-700/90">
+                思考模式耗时较长，请耐心等待…
+              </span>
             )}
           </span>
         ) : (
-          <pre className="whitespace-pre-wrap break-words font-mono text-[13px] leading-relaxed">
+          <pre
+            className={`whitespace-pre-wrap break-words font-mono text-[13px] leading-relaxed ${
+              isStatusOnly ? "text-shimmer" : ""
+            }`}
+          >
             {msg.content}
           </pre>
         )}

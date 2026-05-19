@@ -100,11 +100,13 @@ class TestDevOutline:
         assert outline.backlog_mvp_ordered == []
 
     def test_excess_list_items_are_truncated(self):
-        outline = DevOutline(
-            modules=[f"mod_{i}" for i in range(20)],
-            risks=[f"risk_{i}" for i in range(8)],
-            backlog_mvp_ordered=[f"b{i}" for i in range(12)],
-            backlog_parking_lot=[f"p{i}" for i in range(11)],
+        outline = DevOutline.model_validate(
+            {
+                "modules": [f"mod_{i}" for i in range(20)],
+                "risks": [f"risk_{i}" for i in range(8)],
+                "backlog_mvp_ordered": [f"b{i}" for i in range(12)],
+                "backlog_parking_lot": [f"p{i}" for i in range(11)],
+            }
         )
         assert len(outline.modules) == 12
         assert len(outline.risks) == 6

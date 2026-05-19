@@ -9,7 +9,7 @@ export async function GET() {
   try {
     const r = await fetch(url, {
       cache: "no-store",
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(25_000),
     });
     const text = await r.text();
     if (!r.ok) {

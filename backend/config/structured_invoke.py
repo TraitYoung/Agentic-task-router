@@ -45,8 +45,13 @@ def prepare_system_content(system_content: str) -> str:
     )
 
 
-def _strip_thinking(text: str) -> str:
+def strip_thinking(text: str) -> str:
+    """移除 Kimi 思考块，避免泄漏到用户可见 merge 流式正文。"""
     return _THINKING_BLOCK_RE.sub("", text).strip()
+
+
+def _strip_thinking(text: str) -> str:
+    return strip_thinking(text)
 
 
 def _extract_json_text(text: str) -> str:

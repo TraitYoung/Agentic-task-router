@@ -54,7 +54,11 @@ export function Composer({
             </div>
           </div>
 
-          <div className="flex items-end gap-3 rounded-[1.5rem] border border-[color:var(--line)] bg-white px-4 py-3 transition-colors focus-within:border-[rgba(201,111,59,0.45)]">
+          <div
+            className={`flex items-end gap-3 rounded-[1.5rem] border border-[color:var(--line)] bg-white px-4 py-3 transition-colors focus-within:border-[rgba(201,111,59,0.45)] ${
+              loading ? "animate-pulse border-zinc-300/80" : ""
+            }`}
+          >
             <textarea
               ref={textareaRef}
               value={text}
@@ -73,15 +77,25 @@ export function Composer({
               className="min-h-[56px] flex-1 resize-none bg-transparent py-1 text-sm leading-7 text-zinc-900 placeholder-zinc-400 focus:outline-none max-h-48"
               style={{ overflowY: "auto" }}
             />
-            <div className="flex items-center gap-2 pb-1">
+            <div className="relative flex items-center gap-2 pb-1">
               {loading ? (
                 <button
                   type="button"
                   onClick={onStop}
-                  className="flex h-11 w-11 items-center justify-center rounded-2xl bg-zinc-900 text-white transition-colors hover:bg-zinc-700"
+                  className="relative flex h-11 w-11 items-center justify-center rounded-2xl bg-zinc-900 text-white transition-colors hover:bg-zinc-700"
                   aria-label="停止生成"
                 >
-                  <svg width="13" height="13" viewBox="0 0 12 12" fill="currentColor">
+                  <span
+                    className="pointer-events-none absolute inset-0 rounded-2xl border-2 border-transparent border-t-white/80 animate-spin"
+                    aria-hidden
+                  />
+                  <svg
+                    width="13"
+                    height="13"
+                    viewBox="0 0 12 12"
+                    fill="currentColor"
+                    className="relative z-10"
+                  >
                     <rect x="2" y="2" width="8" height="8" rx="1.2" />
                   </svg>
                 </button>

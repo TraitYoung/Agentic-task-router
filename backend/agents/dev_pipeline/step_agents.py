@@ -14,7 +14,7 @@ logger = logging.getLogger("specforge.step_agents")
 
 from config.context_budget import WORKFLOW_STEP_JSON_MAX_CHARS, clip_text
 from config.step_model_routing import resolve_step_llm
-from config.structured_invoke import invoke_structured, prepare_system_content
+from config.structured_invoke import invoke_structured, prepare_system_content, strip_thinking
 from schemas.workflows import (
     DevCodeSketch,
     DevOutline,
@@ -73,7 +73,7 @@ def _system(content: str) -> SystemMessage:
     return SystemMessage(content=prepare_system_content(content))
 
 
-def _message_content(chunk: Any) -> str:
+def _message_content(chunk: Any, *, strip_think: bool = False) -> str:
     """LangChain AIMessageChunk.content 可能是 str 或 list。"""
     raw = getattr(chunk, "content", chunk)
     if isinstance(raw, list):
@@ -83,8 +83,10 @@ def _message_content(chunk: Any) -> str:
                 parts.append(str(block.get("text", "")))
             else:
                 parts.append(str(block))
-        return "".join(parts)
-    return str(raw) if raw is not None else ""
+        text = "".join(parts)
+    else:
+        text = str(raw) if raw is not None else ""
+    return strip_thinking(text) if strip_think else text
 
 
 def _json_clip(obj: Any, max_chars: int) -> str:
@@ -232,16 +234,16 @@ def run_merge_step(
     if stream_callback is not None:
         full: list[str] = []
         for chunk in step_llm.stream(messages):
-            token = _message_content(chunk)
+            token = _message_content(chunk, strip_think=True)
             if token:
                 stream_callback(token)
                 full.append(token)
-        result = "".join(full).strip()
+        result = strip_thinking("".join(full)).strip()
         logger.info("merge step streamed: chars=%d", len(result))
         return result
 
     rsp = step_llm.invoke(messages)
-    result = _message_content(rsp).strip()
+    result = strip_thinking(_message_content(rsp)).strip()
     logger.info("merge step done: chars=%d", len(result))
     return result
 

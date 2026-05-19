@@ -25,4 +25,6 @@ def test_health_reports_operational_fields_when_redis_is_down(monkeypatch):
     assert isinstance(body["env"]["has_llm_key"], bool)
     assert body["env"]["llm_model"] == "kimi-k2.6"
     assert body["env"]["llm_base_url"] == "https://api.moonshot.cn/v1"
+    assert body["env"]["llm_provider"] == "moonshot"
+    assert body["env"]["llm_thinking"] == "default"
     assert "has_qwen_key" not in body["env"]

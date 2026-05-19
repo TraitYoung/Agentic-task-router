@@ -6,6 +6,12 @@ import type { TraceStepRow, Message, UiMode } from "./types";
 import { parseSseEvent } from "./lib";
 import { AssistantBubble, UserBubble } from "./Bubble";
 import { Composer } from "./Composer";
+import { PipelineProgress } from "./PipelineProgress";
+import {
+  normalizePipelineStep,
+  pipelineStepLabel,
+  type PipelineStepId,
+} from "./pipelineSteps";
 import { WelcomeHero } from "./WelcomeHero";
 import { ErrorBoundary } from "./ErrorBoundary";
 
@@ -41,6 +47,8 @@ export default function Home() {
   const [stackHint, setStackHint] = useState("");
   const [exporting, setExporting] = useState(false);
   const [elapsed, setElapsed] = useState(0);
+  const [pipelineStep, setPipelineStep] = useState<PipelineStepId | null>(null);
+  const [backendModel, setBackendModel] = useState<string | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -69,10 +77,16 @@ export default function Home() {
         const data = (await res.json().catch(() => ({}))) as {
           ok?: boolean;
           detail?: string;
-          backendHealth?: { redis?: boolean | { ok?: boolean }; redis_ok?: boolean };
+          backendHealth?: {
+            redis?: boolean | { ok?: boolean };
+            redis_ok?: boolean;
+            env?: { llm_model?: string };
+          };
         };
         if (res.ok && data.ok) {
           setStackOk(true);
+          const model = data.backendHealth?.env?.llm_model;
+          if (model) setBackendModel(model);
           const redisOk =
             typeof data.backendHealth?.redis === "object"
               ? data.backendHealth.redis.ok
@@ -82,7 +96,10 @@ export default function Home() {
           }
         } else {
           setStackOk(false);
-          setStackHint(data.detail || "无法连接后端，请确认 uvicorn 已在本机 8000 监听。");
+          setStackHint(
+            data.detail ||
+              "无法连接后端。若使用线上服务，Hugging Face Space 冷启动可能需要 20–30 秒，请稍后重试。"
+          );
         }
       } catch (e) {
         setStackOk(false);
@@ -135,6 +152,7 @@ export default function Home() {
     setLoading(true);
     setError("");
     setText("");
+    setPipelineStep(null);
 
     const userMsgId = crypto.randomUUID();
     const assistantMsgId = crypto.randomUUID();
@@ -209,6 +227,8 @@ export default function Home() {
             );
           }
           if (msg.type === "status") {
+            const step = normalizePipelineStep(String(msg.step ?? ""));
+            if (step) setPipelineStep(step);
             const statusLine = `> ${msg.text as string}`;
             setMessages((prev) =>
               prev.map((m) =>
@@ -276,6 +296,7 @@ export default function Home() {
     } finally {
       setStreamingId(null);
       setLoading(false);
+      setPipelineStep(null);
       abortRef.current = null;
     }
   }
@@ -331,10 +352,14 @@ export default function Home() {
   const isEmpty = messages.length === 0 && !loading;
   const readyToSend = canSendMessage(text, sessionId, loading);
   const statusLabel = loading
-    ? "生成中"
-    : stackOk === false
-    ? "后端未连接"
-    : "会话已就绪";
+    ? pipelineStepLabel(pipelineStep, mode)
+    : stackOk === null
+      ? "正在连接后端…"
+      : stackOk === false
+        ? "后端未连接"
+        : backendModel
+          ? `会话已就绪 · ${backendModel}`
+          : "会话已就绪";
 
   return (
     <ErrorBoundary>
@@ -360,11 +385,11 @@ export default function Home() {
               <div className="hidden items-center gap-2 rounded-full border border-[color:var(--line)] bg-white/70 px-3 py-1.5 text-xs text-zinc-500 sm:flex">
                 <span
                   className={`h-2 w-2 rounded-full ${
-                    loading
+                    loading || stackOk === null
                       ? "bg-sky-500 animate-pulse"
                       : stackOk === false
-                      ? "bg-red-500"
-                      : "bg-emerald-500"
+                        ? "bg-red-500"
+                        : "bg-emerald-500"
                   }`}
                 />
                 <span>{statusLabel}</span>
@@ -444,6 +469,7 @@ export default function Home() {
             <WelcomeHero mode={mode} stackOk={stackOk} onPromptClick={onPromptClick} />
           ) : (
             <div className="mx-auto flex max-w-4xl flex-col gap-5 px-4 py-8">
+              <PipelineProgress activeStep={pipelineStep} visible={loading} />
               {messages.map((msg) =>
                 msg.role === "user" ? (
                   <UserBubble key={msg.id} msg={msg} />
@@ -453,6 +479,7 @@ export default function Home() {
                     msg={msg}
                     isStreaming={streamingId === msg.id}
                     elapsed={elapsed}
+                    stageLabel={pipelineStepLabel(pipelineStep, mode)}
                   />
                 )
               )}

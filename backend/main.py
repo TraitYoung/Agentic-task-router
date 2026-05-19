@@ -31,9 +31,22 @@ logger = get_logger("specforge.main")
 app = FastAPI(title="SpecForge API", version="2.0.0")
 STARTED_AT = time.monotonic()
 
+
+def _cors_origins() -> list[str]:
+    origins = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://spec-forge-phi.vercel.app",
+    ]
+    extra = os.getenv("CORS_ORIGINS", "").strip()
+    if extra:
+        origins.extend(x.strip() for x in extra.split(",") if x.strip())
+    return list(dict.fromkeys(origins))
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
