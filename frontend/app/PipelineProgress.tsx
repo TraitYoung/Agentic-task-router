@@ -22,7 +22,9 @@ export function PipelineProgress({
             activeIdx === i ||
             (activeStep === "discovery_done" && i === 1) ||
             (activeStep === "sprint_done" && i === 2) ||
-            (activeStep === "parallel_done" && i === 3);
+            (activeStep === "implementation_done" && i === 3) ||
+            (activeStep === "delivery_done" && i === 4) ||
+            (activeStep === "test_code_done" && i === 5);
           return (
             <li key={step.id} className="flex items-center gap-1.5">
               {i > 0 && <span className="text-zinc-300">›</span>}
@@ -53,11 +55,17 @@ export function PipelineProgress({
           );
         })}
       </ol>
-      <div
-        className="progress-shimmer mt-3 h-1 w-full overflow-hidden rounded-full bg-zinc-200/80"
-        role="progressbar"
-        aria-label="生成进度"
-      />
+      <MotionlessBar />
     </div>
+  );
+}
+
+function MotionlessBar() {
+  return (
+    <div
+      className="progress-shimmer mt-3 h-1 w-full overflow-hidden rounded-full bg-zinc-200/80"
+      role="progressbar"
+      aria-label="生成进度"
+    />
   );
 }

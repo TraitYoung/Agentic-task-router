@@ -16,7 +16,7 @@ def test_health_reports_operational_fields_when_redis_is_down(monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
-    assert body["version"] == "2.0.0"
+    assert body["version"] == "3.0.0"
     assert isinstance(body["uptime_seconds"], (int, float))
     assert body["redis"]["ok"] is False
     assert "redis unavailable" in body["redis"]["error"]

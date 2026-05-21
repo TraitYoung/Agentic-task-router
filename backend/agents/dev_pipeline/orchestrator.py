@@ -1,4 +1,4 @@
-"""A 方向 orchestrator：阶段1配置化 + 阶段2并行实现/测试并汇总。"""
+"""A 方向 orchestrator：discovery → sprint → implementation → delivery → test_code → merge。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, NamedTuple
 
@@ -29,12 +28,14 @@ from .step_agents import (
     MERGE_CFG,
     REVERSE_ENGINEER_CFG,
     SPRINT_CFG,
+    TEST_CODE_CFG,
     run_delivery_step,
     run_discovery_step,
     run_implementation_step,
     run_merge_step,
     run_reverse_engineer_step,
     run_sprint_step,
+    run_test_code_step,
 )
 
 
@@ -91,6 +92,12 @@ def _trace_step(idx: int, node: str, t_ms: float, summary: dict[str, Any]) -> di
     }
 
 
+def _delivery_trace_summary(delivery) -> dict[str, Any]:
+    d = delivery.model_dump()
+    d["test_cases_count"] = len(delivery.test_cases)
+    return d
+
+
 def _finish_spec(
     *,
     user_text: str,
@@ -98,6 +105,7 @@ def _finish_spec(
     outline,
     sketch,
     delivery,
+    test_bundle,
     merged_notes: str,
     profile: dict[str, Any],
     steps: list[dict[str, Any]],
@@ -109,8 +117,16 @@ def _finish_spec(
         delivery=delivery,
         merged_notes=merged_notes,
         profile=profile,
+        test_bundle=test_bundle,
     )
-    summary = build_spec_chat_summary(spec=spec, outline=outline, merged_notes=merged_notes, profile=profile)
+    summary = build_spec_chat_summary(
+        spec=spec,
+        outline=outline,
+        delivery=delivery,
+        merged_notes=merged_notes,
+        profile=profile,
+        test_bundle=test_bundle,
+    )
     filename, rel_path = save_artifact_md(artifact_md, user_text, mode="spec")
     return PipelineResult(summary, artifact_md, filename, rel_path, steps)
 
@@ -126,6 +142,82 @@ def _finish_review(
     summary = build_review_chat_summary(spec=spec, profile=profile)
     filename, rel_path = save_artifact_md(artifact_md, user_text, mode="review")
     return PipelineResult(summary, artifact_md, filename, rel_path, steps)
+
+
+def _run_impl_delivery_test_code(
+    *,
+    llm,
+    spec,
+    outline,
+    profile_injection: str,
+    profile_focus: str,
+    profile_name: str,
+    steps: list[dict[str, Any]],
+    step_base: int = 3,
+) -> tuple[Any, Any, Any]:
+    """串行：implementation → delivery（真实 sketch）→ test_code。"""
+    t0 = time.perf_counter()
+    sketch = run_implementation_step(
+        llm=llm,
+        discovery=spec,
+        sprint=outline,
+        profile_injection=profile_injection,
+    )
+    t_impl = (time.perf_counter() - t0) * 1000
+    steps.append(
+        _trace_step(
+            step_base,
+            IMPLEMENT_CFG.node,
+            t_impl,
+            {"profile": profile_name, "impl_then_delivery": True, "sketch": sketch.model_dump()},
+        )
+    )
+
+    t0 = time.perf_counter()
+    delivery = run_delivery_step(
+        llm=llm,
+        discovery=spec,
+        sprint=outline,
+        sketch=sketch,
+        profile_focus=profile_focus,
+    )
+    t_del = (time.perf_counter() - t0) * 1000
+    steps.append(
+        _trace_step(
+            step_base + 1,
+            DELIVERY_CFG.node,
+            t_del,
+            {
+                "profile": profile_name,
+                "impl_then_delivery": True,
+                "delivery": _delivery_trace_summary(delivery),
+            },
+        )
+    )
+
+    t0 = time.perf_counter()
+    test_bundle = run_test_code_step(
+        llm=llm,
+        discovery=spec,
+        sprint=outline,
+        sketch=sketch,
+        delivery=delivery,
+        profile_focus=profile_focus,
+    )
+    t_test = (time.perf_counter() - t0) * 1000
+    steps.append(
+        _trace_step(
+            step_base + 2,
+            TEST_CODE_CFG.node,
+            t_test,
+            {
+                "profile": profile_name,
+                "test_bundle": test_bundle.model_dump(),
+                "test_files_count": len(test_bundle.files),
+            },
+        )
+    )
+    return sketch, delivery, test_bundle
 
 
 def run_dev_pipeline(user_text: str, llm, *, retrieval_context: str = "") -> PipelineResult:
@@ -155,46 +247,15 @@ def run_dev_pipeline(user_text: str, llm, *, retrieval_context: str = "") -> Pip
     t2 = (time.perf_counter() - t0) * 1000
     steps.append(_trace_step(2, SPRINT_CFG.node, t2, {"profile": profile["name"], "sprint_design": outline.model_dump()}))
 
-    def _impl():
-        return run_implementation_step(
-            llm=llm,
-            discovery=spec,
-            sprint=outline,
-            profile_injection=profile_injection,
-        )
-
-    def _delivery_seed():
-        from schemas.workflows import DevCodeSketch
-
-        seed = DevCodeSketch(language="text", code="", notes="parallel-seed")
-        return run_delivery_step(
-            llm=llm,
-            discovery=spec,
-            sprint=outline,
-            sketch=seed,
-            profile_focus=profile_focus,
-        )
-
-    t0 = time.perf_counter()
-    with ThreadPoolExecutor(max_workers=2) as ex:
-        sketch = ex.submit(_impl).result()
-        delivery = ex.submit(_delivery_seed).result()
-    t3 = (time.perf_counter() - t0) * 1000
-    steps.append(
-        _trace_step(
-            3,
-            IMPLEMENT_CFG.node,
-            t3,
-            {"profile": profile["name"], "parallel_group": "impl_delivery", "sketch": sketch.model_dump()},
-        )
-    )
-    steps.append(
-        _trace_step(
-            4,
-            DELIVERY_CFG.node,
-            t3,
-            {"profile": profile["name"], "parallel_group": "impl_delivery", "delivery": delivery.model_dump()},
-        )
+    sketch, delivery, test_bundle = _run_impl_delivery_test_code(
+        llm=llm,
+        spec=spec,
+        outline=outline,
+        profile_injection=profile_injection,
+        profile_focus=profile_focus,
+        profile_name=profile["name"],
+        steps=steps,
+        step_base=3,
     )
 
     t0 = time.perf_counter()
@@ -206,7 +267,7 @@ def run_dev_pipeline(user_text: str, llm, *, retrieval_context: str = "") -> Pip
         delivery=delivery,
     )
     t4 = (time.perf_counter() - t0) * 1000
-    steps.append(_trace_step(5, MERGE_CFG.node, t4, {"profile": profile["name"], "merge_preview": merged_notes[:300]}))
+    steps.append(_trace_step(6, MERGE_CFG.node, t4, {"profile": profile["name"], "merge_preview": merged_notes[:300]}))
 
     logger.info(
         "dev_pipeline done: profile=%s steps=%d total_ms=%d",
@@ -220,6 +281,7 @@ def run_dev_pipeline(user_text: str, llm, *, retrieval_context: str = "") -> Pip
         outline=outline,
         sketch=sketch,
         delivery=delivery,
+        test_bundle=test_bundle,
         merged_notes=merged_notes,
         profile=profile,
         steps=steps,
@@ -299,29 +361,62 @@ def run_dev_pipeline_stream(
     steps.append(_trace_step(2, SPRINT_CFG.node, t2, {"profile": profile["name"], "sprint_design": outline.model_dump()}))
     _put(event_queue, {"type": "status", "step": "sprint_done", "text": "架构设计完成"})
 
-    _put(event_queue, {"type": "status", "step": "parallel", "text": "正在并行生成代码草案与测试方案…"})
-
-    def _impl():
-        return run_implementation_step(llm=llm, discovery=spec, sprint=outline, profile_injection=profile_injection)
-
-    def _delivery_seed():
-        from schemas.workflows import DevCodeSketch
-
-        seed = DevCodeSketch(language="text", code="", notes="parallel-seed")
-        return run_delivery_step(llm=llm, discovery=spec, sprint=outline, sketch=seed, profile_focus=profile_focus)
-
+    _put(event_queue, {"type": "status", "step": "implementation", "text": "正在生成实现草案…"})
     t0 = time.perf_counter()
-    with ThreadPoolExecutor(max_workers=2) as ex:
-        sketch = ex.submit(_impl).result()
-        delivery = ex.submit(_delivery_seed).result()
-    t3 = (time.perf_counter() - t0) * 1000
-    steps.append(
-        _trace_step(3, IMPLEMENT_CFG.node, t3, {"profile": profile["name"], "parallel_group": "impl_delivery", "sketch": sketch.model_dump()})
+    sketch = run_implementation_step(
+        llm=llm, discovery=spec, sprint=outline, profile_injection=profile_injection
     )
+    t_impl = (time.perf_counter() - t0) * 1000
     steps.append(
-        _trace_step(4, DELIVERY_CFG.node, t3, {"profile": profile["name"], "parallel_group": "impl_delivery", "delivery": delivery.model_dump()})
+        _trace_step(
+            3,
+            IMPLEMENT_CFG.node,
+            t_impl,
+            {"profile": profile["name"], "impl_then_delivery": True, "sketch": sketch.model_dump()},
+        )
     )
-    _put(event_queue, {"type": "status", "step": "parallel_done", "text": "代码草案与测试方案生成完成"})
+    _put(event_queue, {"type": "status", "step": "implementation_done", "text": "实现草案完成"})
+
+    _put(event_queue, {"type": "status", "step": "delivery", "text": "正在对照代码草案编写测试方案…"})
+    t0 = time.perf_counter()
+    delivery = run_delivery_step(
+        llm=llm, discovery=spec, sprint=outline, sketch=sketch, profile_focus=profile_focus
+    )
+    t_del = (time.perf_counter() - t0) * 1000
+    steps.append(
+        _trace_step(
+            4,
+            DELIVERY_CFG.node,
+            t_del,
+            {"profile": profile["name"], "impl_then_delivery": True, "delivery": _delivery_trace_summary(delivery)},
+        )
+    )
+    _put(event_queue, {"type": "status", "step": "delivery_done", "text": "测试方案完成"})
+
+    _put(event_queue, {"type": "status", "step": "test_code", "text": "正在生成可粘贴的测试代码草稿…"})
+    t0 = time.perf_counter()
+    test_bundle = run_test_code_step(
+        llm=llm,
+        discovery=spec,
+        sprint=outline,
+        sketch=sketch,
+        delivery=delivery,
+        profile_focus=profile_focus,
+    )
+    t_test = (time.perf_counter() - t0) * 1000
+    steps.append(
+        _trace_step(
+            5,
+            TEST_CODE_CFG.node,
+            t_test,
+            {
+                "profile": profile["name"],
+                "test_bundle": test_bundle.model_dump(),
+                "test_files_count": len(test_bundle.files),
+            },
+        )
+    )
+    _put(event_queue, {"type": "status", "step": "test_code_done", "text": "测试代码草稿完成"})
 
     _put(event_queue, {"type": "status", "step": "merge", "text": "正在汇总发布说明并生成实现包…"})
 
@@ -330,7 +425,7 @@ def run_dev_pipeline_stream(
         llm=llm, discovery=spec, sprint=outline, sketch=sketch, delivery=delivery, stream_callback=None
     )
     t4 = (time.perf_counter() - t2_start) * 1000
-    steps.append(_trace_step(5, MERGE_CFG.node, t4, {"profile": profile["name"], "merge_preview": merged_notes[:300]}))
+    steps.append(_trace_step(6, MERGE_CFG.node, t4, {"profile": profile["name"], "merge_preview": merged_notes[:300]}))
 
     return _finish_spec(
         user_text=clipped,
@@ -338,6 +433,7 @@ def run_dev_pipeline_stream(
         outline=outline,
         sketch=sketch,
         delivery=delivery,
+        test_bundle=test_bundle,
         merged_notes=merged_notes,
         profile=profile,
         steps=steps,

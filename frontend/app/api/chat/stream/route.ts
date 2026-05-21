@@ -27,11 +27,14 @@ export async function POST(req: NextRequest) {
 
   const backendUrl = `${getBackendBaseUrl()}/api/v1/chat/stream`;
 
+  const apiKey = req.headers.get("x-api-key") || undefined;
+
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
   if (sessionId) headers["x-session-id"] = sessionId;
   if (traceId) headers["x-trace-id"] = traceId;
+  if (apiKey) headers["x-api-key"] = apiKey;
 
   let backendRes: Response;
   try {

@@ -18,7 +18,8 @@ SpecForge 的 demo 不只展示 happy path。上线后需要能回答三个问�
 | SQLite FTS 查询语法错误 | FTS5 `MATCH` 遇到特殊字符会抛 `OperationalError`; 当前实现记录 warning 并回退到 `LIKE` 检索. | 后端 warning: `spec FTS search failed, falling back to LIKE`; 用户请求继续进入 LLM 流水线. |
 | 单任务 token 超预算 | `context_budget.clip_text()` 对用户输入和阶段 JSON 摘要做最大长度裁剪（默认 2500 字/步）. | Trace summary 保留 `_metrics.estimated_tokens` |
 | SSE 中断 | 后端 stream 捕获异常并发送 `{type:"error", step, detail}`; 前端保留已收到内容并显示错误. | 气泡含步骤名，如「步骤 sprint_design 失败」 |
-| 产出过长难读 | 聊天仅 `reply` 摘要；`artifact` 事件携带完整 SPEC.md，并写入 `output/chats/` | 气泡按钮：复制实现 Prompt / 下载 SPEC.md |
+| 产出过长难读 | 聊天仅 `reply` 摘要；`artifact` 事件携带完整 SPEC.md，并写入 `output/chats/` | 气泡按钮：复制实现/测试 Prompt、测试代码、下载 SPEC.md |
+| Delivery 与草案不一致（历史） | 曾并行跑 delivery 并使用空 sketch；已改为 **implementation → delivery → test_code** 串行 | trace 中 `impl_then_delivery: true`；delivery 摘要含 `test_cases_count` |
 | 缺少 API key | 启动时 warning; health 中 `env.has_llm_key=false`; 真正调用 LLM 时失败. | Space logs 可见 `LLM_API_KEY not set`, health 可提前发现. |
 
 ## 结构化流水线失败类型
@@ -65,4 +66,4 @@ SpecForge 的 demo 不只展示 happy path。上线后需要能回答三个问�
 - SQLite 在免费容器中不是强持久化方案; 正式生产应挂载磁盘或迁移 PostgreSQL.
 - Redis 是增强项而不是硬依赖; Upstash Redis 可作为免费 demo 缓存层.
 - 如果 LLM 调用超过 Vercel 函数时间, 前端只代理请求, 长耗时主要由 Hugging Face Space 后端承接.
-- 本地/Space 部署后建议用「记账 App + React + Dexie」类需求跑通 Spec 五步；失败时查 `step` 字段与后端 `structured_invoke` 日志.
+- 本地/Space 部署后建议用「记账 App + React + Dexie」类需求跑通 Spec 六步（含 test_code）；失败时查 `step` 字段与后端 `structured_invoke` 日志.

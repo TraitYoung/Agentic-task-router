@@ -4,8 +4,12 @@ export type PipelineStepId =
   | "discovery_done"
   | "sprint"
   | "sprint_done"
-  | "parallel"
-  | "parallel_done"
+  | "implementation"
+  | "implementation_done"
+  | "delivery"
+  | "delivery_done"
+  | "test_code"
+  | "test_code_done"
   | "merge"
   | "reverse"
   | "reverse_done";
@@ -14,7 +18,9 @@ export const PIPELINE_STEPS: { id: PipelineStepId; label: string }[] = [
   { id: "profile", label: "识别画像" },
   { id: "discovery", label: "需求分析" },
   { id: "sprint", label: "架构设计" },
-  { id: "parallel", label: "并行草案" },
+  { id: "implementation", label: "实现草案" },
+  { id: "delivery", label: "测试方案" },
+  { id: "test_code", label: "测试代码" },
   { id: "merge", label: "汇总发布" },
 ];
 
@@ -24,8 +30,12 @@ const ORDER: PipelineStepId[] = [
   "discovery_done",
   "sprint",
   "sprint_done",
-  "parallel",
-  "parallel_done",
+  "implementation",
+  "implementation_done",
+  "delivery",
+  "delivery_done",
+  "test_code",
+  "test_code_done",
   "merge",
 ];
 
@@ -38,17 +48,14 @@ export function normalizePipelineStep(step: string | undefined): PipelineStepId 
 
 export function pipelineStepIndex(step: PipelineStepId | null): number {
   if (!step) return -1;
-  const idx = ORDER.indexOf(step);
-  if (idx < 0) return -1;
-  if (step === "discovery_done") return 1;
-  if (step === "sprint_done") return 2;
-  if (step === "parallel_done") return 3;
-  if (step === "merge") return 4;
-  if (step === "discovery") return 1;
-  if (step === "sprint") return 2;
-  if (step === "parallel") return 3;
   if (step === "profile") return 0;
-  return idx;
+  if (step === "discovery" || step === "discovery_done") return 1;
+  if (step === "sprint" || step === "sprint_done") return 2;
+  if (step === "implementation" || step === "implementation_done") return 3;
+  if (step === "delivery" || step === "delivery_done") return 4;
+  if (step === "test_code" || step === "test_code_done") return 5;
+  if (step === "merge") return 6;
+  return ORDER.indexOf(step);
 }
 
 export function pipelineStepLabel(step: PipelineStepId | null, mode: "spec" | "review"): string {
@@ -63,8 +70,12 @@ export function pipelineStepLabel(step: PipelineStepId | null, mode: "spec" | "r
     discovery_done: "需求分析完成",
     sprint: "设计架构与 Sprint 待办…",
     sprint_done: "架构设计完成",
-    parallel: "生成代码草案与测试方案…",
-    parallel_done: "并行生成完成",
+    implementation: "生成实现草案…",
+    implementation_done: "实现草案完成",
+    delivery: "对照草案编写测试方案…",
+    delivery_done: "测试方案完成",
+    test_code: "生成测试代码草稿…",
+    test_code_done: "测试代码草稿完成",
     merge: "汇总发布说明…",
   };
   return (step && map[step]) || "生成中…";

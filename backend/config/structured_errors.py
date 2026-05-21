@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from schemas.error_codes import ErrorCode
+
 
 class StructuredStepError(Exception):
     """某一步 invoke_structured 失败。"""
@@ -10,6 +12,7 @@ class StructuredStepError(Exception):
         self.step_id = step_id
         self.model_name = model_name
         self.cause = cause
+        self.error_code = ErrorCode.LLM_FAILURE
         super().__init__(str(cause))
 
     def user_message(self) -> str:

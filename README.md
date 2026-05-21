@@ -28,7 +28,7 @@
 - **全链路追踪**：每轮返回 trace_id + trace[]，记录每步骤耗时与关键输出，支持性能复盘
 - **项目画像自动匹配**：关键词检测识别 Web/Mobile/API/Data/Game Tools 共 5 种项目类型，注入对应工程关注点与输出偏好
 - **步骤级模型路由**：发现/设计/实现/交付/合并各步骤可独立配置不同 LLM 模型，按步骤粒度调配成本与能力
-- **阶段 2 并行执行**：实现草案与测试交付通过 ThreadPoolExecutor 并行运行，降低端到端延迟
+- **串行对齐的测试方案**：实现草案完成后再生成测试方案与测试代码草稿，确保用例与代码一致
 - **RAG 检索增强**：正向自动检索历史相似规格作为参考上下文，逆向积累高频代码问题模式，越用越准
 - **SSE 流式输出**：聊天气泡仅展示短摘要；完整 **SPEC.md / REVIEW.md** 实现包落盘至 `output/chats/`，支持一键复制 Cursor Prompt 或下载
 
@@ -41,9 +41,18 @@
 1. **需求发现** — 用户故事、验收标准、Sprint 目标、可度量结果
 2. **Sprint 设计** — 模块拆分、数据流、有序待办、技术探针、停车场
 3. **实现草案** — MVP 核心路径代码草稿（含语言标识与依赖说明）
-4. **测试与交付** — 测试用例、完成定义 (DoD)、CI/CD 提示、CHANGELOG、Sprint 回顾
+4. **测试与交付** — 测试用例、完成定义 (DoD)、CI/CD 提示、CHANGELOG、Sprint 回顾（对照实现草案生成）
+5. **测试代码草稿** — 2~3 个可粘贴的测试文件（vitest/pytest 等），写入 SPEC.md 的 `Generated Test Files`
 
-聊天气泡为**摘要**；完整包含 **Implementation / Test Prompt**、代码草稿与 Release Notes，保存为 `output/chats/*_SPEC.md`，可在界面复制或下载后拖入 Cursor/Copilot。
+聊天气泡为**摘要**（含测试用例与 DoD 预览）；完整 **SPEC.md** 含 Implementation / Test Prompt、代码草稿、Generated Test Files 与 Release Notes，保存为 `output/chats/*_SPEC.md`，可在界面复制或下载后拖入 Cursor/Copilot。
+
+### 三种「测试」概念（避免混淆）
+
+| 类型 | 说明 |
+|------|------|
+| **流水线测试方案** | Delivery 步产出的用例标题、DoD、CI 说明；不自动执行 |
+| **测试代码草稿** | Test Code 步产出的可粘贴测试文件；需在用户项目中自行运行 |
+| **本仓库 pytest** | [`tests/`](tests/) 验证 SpecForge 自身；与业务产出无关 |
 
 ### 逆向审查 (Review)：代码 → 审查报告
 

@@ -5,24 +5,12 @@
 
 from __future__ import annotations
 
-import os
+from config.settings import get_settings
 
+_settings = get_settings()
 
-def _env_int(name: str, default: int) -> int:
-    raw = os.getenv(name)
-    if raw is None or not raw.strip():
-        return default
-    try:
-        return max(0, int(raw))
-    except ValueError:
-        return default
-
-
-# 工作流：首包用户原文进入解析的上限
-WORKFLOW_USER_TEXT_MAX_CHARS = _env_int("AX_WORKFLOW_USER_MAX_CHARS", 8000)
-
-# 工作流：步骤间传递的 JSON 摘要硬上限（避免下一步 prompt 膨胀）
-WORKFLOW_STEP_JSON_MAX_CHARS = _env_int("AX_WORKFLOW_STEP_JSON_MAX_CHARS", 2500)
+WORKFLOW_USER_TEXT_MAX_CHARS = _settings.ax_workflow_user_max_chars
+WORKFLOW_STEP_JSON_MAX_CHARS = _settings.ax_workflow_step_json_max_chars
 
 
 def clip_text(text: str, max_chars: int) -> str:

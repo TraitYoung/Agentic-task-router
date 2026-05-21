@@ -1,6 +1,8 @@
 /** 从 artifact markdown 提取可复制段落（与后端 schemas/artifact_pack 标题一致） */
 
 const IMPL_HEADING = "## Cursor / Copilot — Implementation Prompt";
+const TEST_HEADING = "## Cursor / Copilot — Test Prompt";
+const GENERATED_TESTS_HEADING = "## Generated Test Files";
 const REVIEW_HEADING = "## Cursor / Copilot — Improvement Prompt";
 
 export function extractSection(md: string, heading: string): string {
@@ -17,6 +19,14 @@ export function extractSection(md: string, heading: string): string {
 
 export function extractImplementationPrompt(artifactMd: string): string {
   return extractSection(artifactMd, IMPL_HEADING);
+}
+
+export function extractTestPrompt(artifactMd: string): string {
+  return extractSection(artifactMd, TEST_HEADING);
+}
+
+export function extractGeneratedTestFiles(artifactMd: string): string {
+  return extractSection(artifactMd, GENERATED_TESTS_HEADING);
 }
 
 export function extractReviewPrompt(artifactMd: string): string {

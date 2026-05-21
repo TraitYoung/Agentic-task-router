@@ -4,6 +4,7 @@ redis
 locust
 python-dotenv
 pydantic
+pydantic-settings
 langgraph
 langchain-openai
 langchain-core
@@ -14,3 +15,4 @@ numpy
 markdown
 playwright
 psutil
+alembic

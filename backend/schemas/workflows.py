@@ -194,6 +194,46 @@ class DevTestsChangelog(BaseModel):
         return normalize_str_list(v, limit=6, item_max=400)
 
 
+class DevTestFile(BaseModel):
+    """单文件测试代码草稿（可粘贴到用户仓库）。"""
+
+    model_config = _WORKFLOW_MODEL_CONFIG
+
+    path: str = Field(default="", max_length=200)
+    code: str = Field(default="", max_length=8000)
+
+    @field_validator("path", mode="before")
+    @classmethod
+    def cap_path(cls, v: object) -> object:
+        return cap_str(v, 200)
+
+    @field_validator("code", mode="before")
+    @classmethod
+    def cap_code(cls, v: object) -> object:
+        return cap_str(v, 8000)
+
+
+class DevTestBundle(BaseModel):
+    """步骤 5：可运行的测试代码草稿（2~3 个文件）。"""
+
+    model_config = _WORKFLOW_MODEL_CONFIG
+
+    files: List[DevTestFile] = Field(default_factory=list, max_length=5)
+
+    @field_validator("files", mode="before")
+    @classmethod
+    def cap_files(cls, v: object) -> object:
+        if not isinstance(v, list):
+            return []
+        out: list[DevTestFile] = []
+        for item in v[:5]:
+            if isinstance(item, DevTestFile):
+                out.append(item)
+            elif isinstance(item, dict):
+                out.append(DevTestFile.model_validate(item))
+        return out
+
+
 class ReverseEngineerSpec(BaseModel):
     """逆向工程：从现有代码推导需求、测试与改进点"""
 

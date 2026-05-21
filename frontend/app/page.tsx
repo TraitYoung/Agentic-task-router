@@ -49,6 +49,9 @@ export default function Home() {
   const [elapsed, setElapsed] = useState(0);
   const [pipelineStep, setPipelineStep] = useState<PipelineStepId | null>(null);
   const [backendModel, setBackendModel] = useState<string | null>(null);
+  const [apiKey, setApiKey] = useState<string>(() => {
+    try { return window.localStorage.getItem("x-api-key") || ""; } catch { return ""; }
+  });
 
   const abortRef = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -73,7 +76,9 @@ export default function Home() {
   useEffect(() => {
     void (async () => {
       try {
-        const res = await fetch("/api/health", { cache: "no-store" });
+        const hdrs: Record<string, string> = {};
+        if (apiKey) hdrs["x-api-key"] = apiKey;
+        const res = await fetch("/api/health", { cache: "no-store", headers: hdrs });
         const data = (await res.json().catch(() => ({}))) as {
           ok?: boolean;
           detail?: string;
@@ -111,9 +116,9 @@ export default function Home() {
   const loadHistory = useCallback(async (sid: string) => {
     if (!sid) return;
     try {
-      const res = await fetch("/api/chat/history", {
-        method: "GET", headers: { "x-session-id": sid },
-      });
+      const hs: Record<string, string> = { "x-session-id": sid };
+      if (apiKey) hs["x-api-key"] = apiKey;
+      const res = await fetch("/api/chat/history", { method: "GET", headers: hs });
       if (!res.ok) return;
       const data = (await res.json()) as { turns?: { user: string; assistant: string; ts: string }[] };
       const turns = data.turns ?? [];
@@ -175,6 +180,7 @@ export default function Home() {
         headers: {
           "Content-Type": "application/json",
           "x-session-id": sessionId,
+          ...(apiKey ? { "x-api-key": apiKey } : {}),
           ...(outboundTraceId ? { "x-trace-id": outboundTraceId } : {}),
         },
         body: JSON.stringify({ text: trimmed.slice(0, 12000), mode }),
@@ -327,9 +333,9 @@ export default function Home() {
     if (!sessionId || exporting) return;
     setExporting(true);
     try {
-      const res = await fetch("/api/chat/export", {
-        method: "POST", headers: { "x-session-id": sessionId },
-      });
+      const expHdrs: Record<string, string> = { "x-session-id": sessionId };
+      if (apiKey) expHdrs["x-api-key"] = apiKey;
+      const res = await fetch("/api/chat/export", { method: "POST", headers: expHdrs });
       if (!res.ok) throw new Error(`导出失败 HTTP ${res.status}`);
       const data: unknown = await res.json();
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
@@ -503,8 +509,10 @@ export default function Home() {
           readyToSend={readyToSend}
           isComposing={isComposing}
           stackOk={stackOk}
+          apiKey={apiKey}
           textareaRef={textareaRef}
           onTextChange={setText}
+          onApiKeyChange={(key) => { setApiKey(key); try { window.localStorage.setItem("x-api-key", key); } catch { /* ignore */ } }}
           onSend={onSend}
           onStop={onStop}
           onKeyDown={onKeyDown}

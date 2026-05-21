@@ -35,15 +35,32 @@ export function TracePanel({ steps, traceId }: { steps: TraceStepRow[]; traceId?
         </div>
       </div>
       <ol className="px-4 pb-3 pt-2 space-y-2 list-decimal text-zinc-600">
-        {steps.map((s) => (
+        {steps.map((s) => {
+          const summary = s.summary as Record<string, unknown> | undefined;
+          const delivery = summary?.delivery as Record<string, unknown> | undefined;
+          const testCount =
+            delivery?.test_cases_count ??
+            (Array.isArray(delivery?.test_cases) ? delivery.test_cases.length : undefined);
+          const testFiles = summary?.test_files_count;
+          const hint =
+            testCount != null
+              ? ` · ${testCount} 条用例`
+              : testFiles != null
+                ? ` · ${testFiles} 个测试文件`
+                : "";
+          return (
           <li key={`${s.index}-${s.node}`} className="break-words">
             <span className="font-mono text-zinc-800">{s.node}</span>
-            <span className="text-zinc-400"> &middot; {s.duration_ms} ms</span>
+            <span className="text-zinc-400">
+              {" "}
+              &middot; {s.duration_ms} ms{hint}
+            </span>
             <pre className="mt-1 whitespace-pre-wrap break-words text-[11px] bg-zinc-50 rounded p-2 border border-zinc-100 max-h-32 overflow-y-auto">
               {JSON.stringify(s.summary, null, 2)}
             </pre>
           </li>
-        ))}
+          );
+        })}
       </ol>
     </details>
   );

@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from collections import defaultdict
@@ -13,7 +12,10 @@ from typing import Callable
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
+
+from core_logging import session_id_var, trace_id_var
+from schemas.error_codes import ErrorCode, ErrorResponse
 
 logger = logging.getLogger("specforge.request")
 
@@ -71,10 +73,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         timestamps[:] = [t for t in timestamps if t > cutoff]
 
         if len(timestamps) >= max_req:
-            return Response(
-                content=json.dumps({"detail": "rate limit exceeded"}, ensure_ascii=False),
+            err = ErrorResponse(
+                error_code=ErrorCode.RATE_LIMIT,
+                message="rate limit exceeded",
+                details={"retry_after_seconds": int(window)},
+            )
+            return JSONResponse(
+                content=err.model_dump(),
                 status_code=429,
-                media_type="application/json",
                 headers={"Retry-After": str(int(window))},
             )
 
@@ -88,35 +94,36 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         trace_id = request.headers.get("x-trace-id", "").strip() or "-"
+        session_id = request.headers.get("x-session-id", "").strip() or "-"
         path = request.url.path
         method = request.method
         ip = _client_ip(request)
+
+        # 注入 contextvars，供下游日志自动携带
+        for_token = trace_id_var.set(trace_id)
+        for_session = session_id_var.set(session_id)
+
         started = time.perf_counter()
-        logger.info(
-            "request start: trace_id=%s method=%s path=%s client_ip=%s",
-            trace_id,
-            method,
-            path,
-            ip,
-        )
+        logger.info("request start: method=%s path=%s client_ip=%s", method, path, ip)
         try:
             response = await call_next(request)
         except Exception:
             duration_ms = (time.perf_counter() - started) * 1000
             logger.exception(
-                "request failed: trace_id=%s method=%s path=%s duration_ms=%.2f client_ip=%s",
-                trace_id,
+                "request failed: method=%s path=%s duration_ms=%.2f client_ip=%s",
                 method,
                 path,
                 duration_ms,
                 ip,
             )
+            # 重置 contextvars
+            trace_id_var.reset(for_token)
+            session_id_var.reset(for_session)
             raise
 
         duration_ms = (time.perf_counter() - started) * 1000
         logger.info(
-            "request done: trace_id=%s method=%s path=%s status=%d duration_ms=%.2f client_ip=%s",
-            trace_id,
+            "request done: method=%s path=%s status=%d duration_ms=%.2f client_ip=%s",
             method,
             path,
             response.status_code,
@@ -125,4 +132,7 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
         )
         if trace_id != "-":
             response.headers.setdefault("X-Trace-Id", trace_id)
+
+        trace_id_var.reset(for_token)
+        session_id_var.reset(for_session)
         return response

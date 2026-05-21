@@ -13,6 +13,7 @@ from schemas.workflows import (
     DevCodeSketch,
     DevOutline,
     DevTaskSpec,
+    DevTestBundle,
     DevTestsChangelog,
     ReverseEngineerSpec,
     to_implementation_prompt,
@@ -22,6 +23,7 @@ from schemas.workflows import (
 
 IMPLEMENTATION_PROMPT_HEADING = "## Cursor / Copilot — Implementation Prompt"
 TEST_PROMPT_HEADING = "## Cursor / Copilot — Test Prompt"
+GENERATED_TEST_FILES_HEADING = "## Generated Test Files"
 REVIEW_PROMPT_HEADING = "## Cursor / Copilot — Improvement Prompt"
 
 
@@ -41,6 +43,54 @@ def _numbered_list(items: list[str], *, limit: int) -> str:
     return "\n".join(f"{i + 1}. {x}" for i, x in enumerate(items[:limit]))
 
 
+def _lang_from_path(path: str, fallback: str = "text") -> str:
+    lower = path.lower()
+    if lower.endswith((".ts", ".tsx")):
+        return "typescript"
+    if lower.endswith(".py"):
+        return "python"
+    if lower.endswith((".js", ".jsx")):
+        return "javascript"
+    if lower.endswith(".go"):
+        return "go"
+    return fallback
+
+
+def _format_generated_test_files(bundle: DevTestBundle | None) -> str:
+    if bundle is None or not bundle.files:
+        return ""
+    parts: list[str] = [GENERATED_TEST_FILES_HEADING, ""]
+    lang_fallback = "typescript"
+    for item in bundle.files:
+        if not item.path.strip() and not item.code.strip():
+            continue
+        lang = _lang_from_path(item.path, lang_fallback)
+        parts.extend(
+            [
+                f"### {item.path or 'tests/example.test.ts'}",
+                "",
+                f"```{lang}",
+                item.code.strip() or "// （测试草稿为空，请按 Test Prompt 编写）",
+                "```",
+                "",
+            ]
+        )
+    return "\n".join(parts).rstrip() + "\n"
+
+
+def format_test_bundle_plain(bundle: DevTestBundle | None) -> str:
+    """合并所有测试文件为纯文本，供「复制测试代码」使用。"""
+    if bundle is None or not bundle.files:
+        return ""
+    chunks: list[str] = []
+    for item in bundle.files:
+        if not item.code.strip():
+            continue
+        header = f"// {item.path}\n" if item.path.strip() else ""
+        chunks.append(f"{header}{item.code.strip()}")
+    return "\n\n".join(chunks)
+
+
 def _safe_slug(text: str, max_len: int = 24) -> str:
     line = (text.splitlines()[0] if text else "session").strip()
     if len(line) > max_len:
@@ -57,6 +107,7 @@ def build_spec_artifact_md(
     delivery: DevTestsChangelog,
     merged_notes: str,
     profile: Mapping[str, Any],
+    test_bundle: DevTestBundle | None = None,
 ) -> str:
     profile_name = str(profile.get("name", "general"))
     profile_focus = "、".join(profile.get("output_focus", []) or [])
@@ -82,40 +133,45 @@ def build_spec_artifact_md(
         _bullet_list(delivery.definition_of_done, limit=8),
     ]
 
-    return "\n".join(
+    test_files_section = _format_generated_test_files(test_bundle)
+    sections = [
+        "# SpecForge · Implementation Pack",
+        "",
+        "## Meta",
+        f"- profile: `{profile_name}`",
+        f"- focus: {profile_focus or '—'}",
+        f"- stack: {spec.stack_hint or '—'}",
+        f"- generated_at: {_now_iso()}",
+        "",
+        "## Summary",
+        f"**Goal:** {spec.goal}",
+        "",
+        f"**MVP slice:** {spec.mvp_sprint_goal or '—'}",
+        "",
+        "**Top backlog:**",
+        _numbered_list(outline.backlog_mvp_ordered, limit=8),
+        "",
+        IMPLEMENTATION_PROMPT_HEADING,
+        "",
+        impl_prompt,
+        "",
+        f"## Starter Code ({lang})",
+        "",
+        f"```{lang}",
+        code_block,
+        "```",
+        "",
+        sketch.notes.strip(),
+        "",
+        TEST_PROMPT_HEADING,
+        "",
+        test_prompt,
+        "",
+    ]
+    if test_files_section:
+        sections.extend([test_files_section, ""])
+    sections.extend(
         [
-            "# SpecForge · Implementation Pack",
-            "",
-            "## Meta",
-            f"- profile: `{profile_name}`",
-            f"- focus: {profile_focus or '—'}",
-            f"- stack: {spec.stack_hint or '—'}",
-            f"- generated_at: {_now_iso()}",
-            "",
-            "## Summary",
-            f"**Goal:** {spec.goal}",
-            "",
-            f"**MVP slice:** {spec.mvp_sprint_goal or '—'}",
-            "",
-            "**Top backlog:**",
-            _numbered_list(outline.backlog_mvp_ordered, limit=8),
-            "",
-            IMPLEMENTATION_PROMPT_HEADING,
-            "",
-            impl_prompt,
-            "",
-            f"## Starter Code ({lang})",
-            "",
-            f"```{lang}",
-            code_block,
-            "```",
-            "",
-            sketch.notes.strip(),
-            "",
-            TEST_PROMPT_HEADING,
-            "",
-            test_prompt,
-            "",
             "## Release Notes",
             "",
             merged_notes.strip(),
@@ -126,18 +182,24 @@ def build_spec_artifact_md(
             "",
         ]
     )
+    return "\n".join(sections)
 
 
 def build_spec_chat_summary(
     *,
     spec: DevTaskSpec,
     outline: DevOutline,
+    delivery: DevTestsChangelog,
     merged_notes: str,
     profile: Mapping[str, Any],
+    test_bundle: DevTestBundle | None = None,
 ) -> str:
     profile_name = str(profile.get("name", "general"))
     release = clip_text(merged_notes.strip(), 1200)
     title = spec.goal.split("。")[0].split(".")[0][:60] or "工程规格"
+    test_count = len(delivery.test_cases)
+    file_count = len(test_bundle.files) if test_bundle else 0
+    test_hint = f"含 {file_count} 个测试文件草稿" if file_count else "含测试 Prompt"
 
     return "\n".join(
         [
@@ -152,6 +214,12 @@ def build_spec_chat_summary(
             "**待办（前 5 条）:**",
             _numbered_list(outline.backlog_mvp_ordered, limit=5),
             "",
+            f"**测试覆盖（{test_count} 条，前 5 条）:**",
+            _numbered_list(delivery.test_cases, limit=5),
+            "",
+            "**DoD（前 3 条）:**",
+            _bullet_list(delivery.definition_of_done, limit=3),
+            "",
             "**风险（前 3 条）:**",
             _bullet_list(outline.risks, limit=3),
             "",
@@ -159,7 +227,7 @@ def build_spec_chat_summary(
             release,
             "",
             "---",
-            "完整 **SPEC.md** 实现包已就绪（含 Cursor 实现/测试 Prompt 与代码草稿）。请使用下方按钮 **复制实现 Prompt** 或 **下载 SPEC.md** 到 Vibe Coding 工具。",
+            f"完整 **SPEC.md** 已就绪（{test_hint}）。请使用下方按钮 **复制实现 Prompt** / **复制测试 Prompt** / **下载 SPEC.md**。",
         ]
     )
 
@@ -236,6 +304,14 @@ def extract_section(md: str, heading: str) -> str:
 
 def extract_implementation_prompt(artifact_md: str) -> str:
     return extract_section(artifact_md, IMPLEMENTATION_PROMPT_HEADING)
+
+
+def extract_test_prompt(artifact_md: str) -> str:
+    return extract_section(artifact_md, TEST_PROMPT_HEADING)
+
+
+def extract_generated_test_files(artifact_md: str) -> str:
+    return extract_section(artifact_md, GENERATED_TEST_FILES_HEADING)
 
 
 def extract_review_prompt(artifact_md: str) -> str:

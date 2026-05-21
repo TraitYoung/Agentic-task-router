@@ -1,7 +1,6 @@
 from uuid import uuid4
 import asyncio
 import json
-import os
 import time
 from datetime import datetime, timezone
 from typing import List, Literal
@@ -11,12 +10,15 @@ from repo_paths import REPO_ROOT
 
 load_dotenv(REPO_ROOT / ".env", override=False)
 
-from fastapi import FastAPI, Header, HTTPException, Response
+from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from prometheus_fastapi_instrumentator import Instrumentator
 
+from auth import api_key_middleware
 from config.llm_settings import has_llm_api_key, llm_env_health
+from config.settings import get_settings
 from config.structured_errors import StructuredStepError
 from config.step_model_routing import resolve_step_llm
 from middleware import RateLimitMiddleware, RequestLogMiddleware
@@ -24,6 +26,7 @@ from agents.workflow_pipelines import run_dev_pipeline, run_reverse_engineer, sy
 from agents.dev_pipeline.orchestrator import run_dev_pipeline_stream, run_reverse_engineer_stream
 from memory.session_cache import SessionCache
 from memory.spec_store import get_spec_store
+from schemas.error_codes import ErrorCode, ErrorResponse
 from schemas.protocols import TaskIntent
 from schemas.trace import TraceStep
 from core_logging import configure_stdio_utf8, get_logger, setup_logging
@@ -33,17 +36,36 @@ setup_logging()
 
 logger = get_logger("specforge.main")
 
-app = FastAPI(title="SpecForge API", version="2.0.0")
+app = FastAPI(
+    title="SpecForge API",
+    description=(
+        "AI 驱动的软件工程规范生成与审查系统。"
+        "将模糊需求转化为结构化工程规格，或将代码反向生成审查报告。"
+    ),
+    version="3.0.0",
+    contact={"name": "SpecForge", "url": "https://github.com/specforge"},
+    license_info={"name": "MIT"},
+    openapi_tags=[
+        {"name": "health", "description": "服务健康与存活探针"},
+        {"name": "chat", "description": "规范生成与代码审查对话端点"},
+        {"name": "export", "description": "会话导出与历史查询"},
+    ],
+)
 STARTED_AT = time.monotonic()
 
+# ── Prometheus metrics ─────────────────────────
+Instrumentator().instrument(app).expose(app, endpoint="/metrics", tags=["health"])
+
+# ── CORS ───────────────────────────────────────
 
 def _cors_origins() -> list[str]:
+    settings = get_settings()
     origins = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "https://spec-forge-phi.vercel.app",
     ]
-    extra = os.getenv("CORS_ORIGINS", "").strip()
+    extra = settings.cors_origins
     if extra:
         origins.extend(x.strip() for x in extra.split(",") if x.strip())
     return list(dict.fromkeys(origins))
@@ -58,18 +80,22 @@ app.add_middleware(
 )
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(RequestLogMiddleware)
+# Auth must be after CORS/rate-limit but before request processing
+app.middleware("http")(api_key_middleware)
+
+# ── Session & store ────────────────────────────
 
 session_cache = SessionCache(ttl_seconds=3600, window_size=5)
-
 spec_store = get_spec_store()
 
-# 启动时校验关键配置（LLM_API_KEY，见 .env.example）
 if not has_llm_api_key():
     logger.warning(
         "LLM_API_KEY not set — LLM calls will fail. "
-        "Copy .env.example to .env and set LLM_API_KEY (Moonshot Kimi or other OpenAI-compatible provider)."
+        "Copy .env.example to .env and set LLM_API_KEY."
     )
 
+
+# ── Shutdown ───────────────────────────────────
 
 @app.on_event("shutdown")
 def _shutdown() -> None:
@@ -78,9 +104,52 @@ def _shutdown() -> None:
     logger.info("shutdown complete")
 
 
-@app.get("/api/v1/health")
+# ── Exception handlers ─────────────────────────
+
+@app.exception_handler(HTTPException)
+async def _http_exception_handler(request: Request, exc: HTTPException):
+    trace_id = getattr(request.state, "trace_id", "") if hasattr(request, "state") else ""
+    code_map = {
+        400: ErrorCode.INVALID_INPUT,
+        401: ErrorCode.AUTH_INVALID,
+        404: ErrorCode.NOT_FOUND,
+        429: ErrorCode.RATE_LIMIT,
+        422: ErrorCode.VALIDATION_ERROR,
+    }
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=ErrorResponse(
+            error_code=code_map.get(exc.status_code, ErrorCode.INTERNAL_ERROR),
+            message=str(exc.detail),
+            trace_id=trace_id,
+        ).model_dump(),
+    )
+
+
+@app.exception_handler(Exception)
+async def _generic_exception_handler(request: Request, exc: Exception):
+    trace_id = getattr(request.state, "trace_id", "") if hasattr(request, "state") else ""
+    logger.exception("unhandled exception: trace_id=%s", trace_id)
+    return JSONResponse(
+        status_code=500,
+        content=ErrorResponse(
+            error_code=ErrorCode.INTERNAL_ERROR,
+            message="internal server error",
+            trace_id=trace_id,
+        ).model_dump(),
+    )
+
+
+# ── Health ─────────────────────────────────────
+
+@app.get(
+    "/api/v1/health",
+    tags=["health"],
+    summary="健康检查",
+    description="轻量探活，供开发代理与运维脚本探测；不调用大模型。",
+    responses={200: {"description": "服务正常"}},
+)
 def api_health():
-    """轻量探活:供 Next 开发代理与运维脚本探测；不调用大模型。"""
     redis_status = {"ok": False, "error": ""}
     try:
         session_cache.client.ping()
@@ -95,6 +164,7 @@ def api_health():
     except Exception as exc:
         sqlite_status["error"] = str(exc)
 
+    settings = get_settings()
     return {
         "ok": True,
         "version": app.version,
@@ -106,7 +176,7 @@ def api_health():
         "memory_mb": _memory_mb(),
         "env": {
             **llm_env_health(),
-            "has_redis_url": bool(os.getenv("REDIS_URL")),
+            "has_redis_url": bool(settings.redis_url),
         },
     }
 
@@ -115,10 +185,12 @@ def _memory_mb() -> float:
     try:
         import psutil
 
-        return round(psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024, 2)
+        return round(psutil.Process().memory_info().rss / 1024 / 1024, 2)
     except Exception:
         return 0.0
 
+
+# ── Models ─────────────────────────────────────
 
 Mode = Literal["spec", "review"]
 
@@ -130,40 +202,49 @@ def _turn_error_payload(exc: Exception) -> dict[str, str]:
 
 
 class ChatRequest(BaseModel):
-    text: str = Field(..., min_length=1, max_length=12000, description="用户输入（想法描述或待审查的代码）")
+    text: str = Field(
+        ...,
+        min_length=1,
+        max_length=12000,
+        description="用户输入（想法描述或待审查的代码）",
+        examples=["做一个 React Todo 应用，支持增删改"],
+    )
     mode: Mode = Field(
         default="spec",
         description="spec=想法→工程规格（正向）；review=粘贴代码→审查报告（逆向）",
+        examples=["spec"],
     )
 
 
 class ChatResponse(BaseModel):
-    session_id: str
-    reply: str
-    intent: TaskIntent
-    trace_id: str
-    trace: list[TraceStep]
-    artifact_md: str | None = None
-    artifact_path: str | None = None
-    artifact_filename: str | None = None
+    session_id: str = Field(..., description="会话 ID")
+    reply: str = Field(..., description="助手回复文本")
+    intent: TaskIntent = Field(..., description="解析后的任务意图")
+    trace_id: str = Field(..., description="请求追踪 ID")
+    trace: list[TraceStep] = Field(default_factory=list, description="流水线各步骤追踪")
+    artifact_md: str | None = Field(default=None, description="生成的 Markdown 工件内容")
+    artifact_path: str | None = Field(default=None, description="工件文件路径")
+    artifact_filename: str | None = Field(default=None, description="工件文件名")
 
 
 class ChatExportItem(BaseModel):
-    user: str
-    assistant: str
-    ts: str
+    user: str = Field(..., description="用户消息")
+    assistant: str = Field(..., description="助手回复")
+    ts: str = Field(..., description="ISO 时间戳")
 
 
 class ChatExportResponse(BaseModel):
-    session_id: str
-    turns: List[ChatExportItem]
-    file_path: str
+    session_id: str = Field(..., description="会话 ID")
+    turns: List[ChatExportItem] = Field(..., description="对话轮次列表")
+    file_path: str = Field(..., description="导出文件路径")
 
 
 class ChatHistoryResponse(BaseModel):
-    session_id: str
-    turns: List[ChatExportItem]
+    session_id: str = Field(..., description="会话 ID")
+    turns: List[ChatExportItem] = Field(..., description="对话轮次列表")
 
+
+# ── Pipeline execution ─────────────────────────
 
 def _execute_turn(payload: ChatRequest, session_id: str):
     store = get_spec_store()
@@ -259,7 +340,6 @@ async def _execute_turn_stream(payload: ChatRequest, session_id: str):
 
     future = loop.run_in_executor(None, _run_sync)
 
-    # 从 queue 读取事件并 yield，直到 executor 完成
     while True:
         try:
             event = await asyncio.wait_for(event_queue.get(), timeout=0.1)
@@ -318,7 +398,6 @@ async def _execute_turn_stream(payload: ChatRequest, session_id: str):
 
 
 def _parse_json_field(raw: str) -> list[str]:
-    """安全解析 JSON 字符串字段，返回字符串列表。"""
     if not raw:
         return []
     try:
@@ -331,14 +410,12 @@ def _parse_json_field(raw: str) -> list[str]:
 
 
 def _extract_profile(trace_raw: list) -> str:
-    """从 trace 首步的 summary 中提取项目画像名。"""
     if trace_raw and isinstance(trace_raw[0], dict):
         return str(trace_raw[0].get("summary", {}).get("profile", ""))
     return ""
 
 
 def _save_spec_result(store, trace_raw: list, user_text: str, profile: str) -> None:
-    """从 trace 中提取 Discovery 步骤的结构化数据并保存。"""
     if not trace_raw:
         return
 
@@ -364,7 +441,6 @@ def _save_spec_result(store, trace_raw: list, user_text: str, profile: str) -> N
 
 
 def _save_review_issues(store, trace_raw: list, profile: str) -> None:
-    """从 trace 中提取审查发现的问题并保存。"""
     if not trace_raw:
         return
 
@@ -385,12 +461,26 @@ def _save_review_issues(store, trace_raw: list, profile: str) -> None:
         store.save_issues(profile=profile, issues=issues)
 
 
-@app.post("/api/v1/chat", response_model=ChatResponse)
+# ── Endpoints ──────────────────────────────────
+
+@app.post(
+    "/api/v1/chat",
+    response_model=ChatResponse,
+    tags=["chat"],
+    summary="生成规范或审查报告（同步）",
+    description="提交用户想法或代码片段，返回工程规格或审查报告。",
+    responses={
+        200: {"description": "成功返回规格/审查报告"},
+        401: {"description": "缺少或无效的 API Key"},
+        422: {"description": "请求参数校验失败"},
+        500: {"description": "内部错误"},
+    },
+)
 async def chat_api(
     payload: ChatRequest,
     response: Response,
-    x_session_id: str | None = Header(default=None),
-    x_trace_id: str | None = Header(default=None, alias="x-trace-id"),
+    x_session_id: str | None = Header(default=None, description="客户端会话 ID"),
+    x_trace_id: str | None = Header(default=None, alias="x-trace-id", description="分布式追踪 ID"),
 ):
     session_id = x_session_id or str(uuid4())
     trace_id = (x_trace_id or "").strip() or str(uuid4())
@@ -435,13 +525,22 @@ async def chat_api(
     )
 
 
-@app.post("/api/v1/chat/stream")
+@app.post(
+    "/api/v1/chat/stream",
+    tags=["chat"],
+    summary="生成规范或审查报告（流式）",
+    description="SSE 流式输出:流水线各步骤实时推送状态/delta 事件。",
+    responses={
+        200: {"description": "SSE 事件流"},
+        401: {"description": "缺少或无效的 API Key"},
+        500: {"description": "内部错误"},
+    },
+)
 async def chat_stream_api(
     payload: ChatRequest,
-    x_session_id: str | None = Header(default=None),
-    x_trace_id: str | None = Header(default=None, alias="x-trace-id"),
+    x_session_id: str | None = Header(default=None, description="客户端会话 ID"),
+    x_trace_id: str | None = Header(default=None, alias="x-trace-id", description="分布式追踪 ID"),
 ):
-    """SSE 流式输出: 流水线各步骤实时推送状态/delta 事件。"""
     session_id = x_session_id or str(uuid4())
     trace_id = (x_trace_id or "").strip() or str(uuid4())
 
@@ -471,14 +570,22 @@ async def chat_stream_api(
     )
 
 
-@app.post("/api/v1/chat/export", response_model=ChatExportResponse)
-async def chat_export_api(x_session_id: str | None = Header(default=None), limit: int = 20):
-    """
-    导出当前 session 的最近对话轮次到 output/chats/*.jsonl。
-
-    - 文件命名:YYYYMMDD_HHMMSS_首句prompt截断.jsonl
-    - 内容:每行一个 {user, assistant, ts}
-    """
+@app.post(
+    "/api/v1/chat/export",
+    response_model=ChatExportResponse,
+    tags=["export"],
+    summary="导出会话对话记录",
+    description="将当前 session 的最近对话轮次导出为 JSONL 文件。",
+    responses={
+        200: {"description": "导出成功"},
+        400: {"description": "缺少 session ID"},
+        404: {"description": "未找到该会话的对话记录"},
+    },
+)
+async def chat_export_api(
+    x_session_id: str | None = Header(default=None, description="客户端会话 ID"),
+    limit: int = 20,
+):
     if not x_session_id:
         raise HTTPException(status_code=400, detail="missing x-session-id header")
 
@@ -518,11 +625,21 @@ async def chat_export_api(x_session_id: str | None = Header(default=None), limit
     return ChatExportResponse(session_id=x_session_id, turns=items, file_path=rel_path)
 
 
-@app.get("/api/v1/chat/history", response_model=ChatHistoryResponse)
-async def chat_history_api(x_session_id: str | None = Header(default=None), limit: int = 50):
-    """
-    获取当前 session 的最近对话轮次（用于前端展示聊天记录）。
-    """
+@app.get(
+    "/api/v1/chat/history",
+    response_model=ChatHistoryResponse,
+    tags=["export"],
+    summary="查询会话历史",
+    description="获取当前 session 的最近对话轮次，用于前端展示聊天记录。",
+    responses={
+        200: {"description": "对话记录列表"},
+        400: {"description": "缺少 session ID"},
+    },
+)
+async def chat_history_api(
+    x_session_id: str | None = Header(default=None, description="客户端会话 ID"),
+    limit: int = 50,
+):
     if not x_session_id:
         raise HTTPException(status_code=400, detail="missing x-session-id header")
 

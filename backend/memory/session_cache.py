@@ -1,9 +1,10 @@
 import json
-import os
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import redis
+
+from config.settings import get_settings
 
 
 class SessionCache:
@@ -15,7 +16,7 @@ class SessionCache:
         ttl_seconds: int = 3600,
         window_size: int = 5,
     ) -> None:
-        self.redis_url = redis_url or os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        self.redis_url = redis_url or get_settings().redis_url
         self.ttl_seconds = ttl_seconds
         self.window_size = window_size
         # 避免无 Redis / 半开连接时 LRANGE 等调用无限阻塞，拖死单 worker 的 FastAPI

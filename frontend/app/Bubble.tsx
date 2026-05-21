@@ -6,8 +6,10 @@ import { TracePanel } from "./TracePanel";
 import { formatTs } from "./lib";
 import {
   downloadMarkdown,
+  extractGeneratedTestFiles,
   extractImplementationPrompt,
   extractReviewPrompt,
+  extractTestPrompt,
 } from "./lib/artifact";
 
 function SummaryBody({ text }: { text: string }) {
@@ -70,13 +72,13 @@ export function AssistantBubble({
   stageLabel?: string;
   mode?: UiMode;
 }) {
-  const [copied, setCopied] = useState<"prompt" | "full" | null>(null);
+  const [copied, setCopied] = useState<"prompt" | "test" | "testcode" | "full" | null>(null);
   const isStatusOnly = msg.content.startsWith("> ") && isStreaming;
   const showThinkingHint = isStreaming && elapsed > 30;
   const hasArtifact = Boolean(msg.artifactMd?.trim());
   const isReview = mode === "review";
 
-  async function copyText(label: "prompt" | "full", text: string) {
+  async function copyText(label: "prompt" | "test" | "testcode" | "full", text: string) {
     if (!text) return;
     await navigator.clipboard.writeText(text);
     setCopied(label);
@@ -96,6 +98,8 @@ export function AssistantBubble({
       ? extractReviewPrompt(msg.artifactMd!)
       : extractImplementationPrompt(msg.artifactMd!)
     : "";
+  const testPromptText = hasArtifact && !isReview ? extractTestPrompt(msg.artifactMd!) : "";
+  const testCodeText = hasArtifact && !isReview ? extractGeneratedTestFiles(msg.artifactMd!) : "";
 
   return (
     <div className="group flex flex-col gap-1 max-w-[80%]">
@@ -138,6 +142,24 @@ export function AssistantBubble({
                   ? "复制改进 Prompt"
                   : "复制实现 Prompt"}
             </button>
+            {!isReview && testPromptText && (
+              <button
+                type="button"
+                onClick={() => copyText("test", testPromptText)}
+                className="px-2.5 py-1.5 text-[11px] rounded-md bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50"
+              >
+                {copied === "test" ? "已复制" : "复制测试 Prompt"}
+              </button>
+            )}
+            {!isReview && testCodeText && (
+              <button
+                type="button"
+                onClick={() => copyText("testcode", testCodeText)}
+                className="px-2.5 py-1.5 text-[11px] rounded-md bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50"
+              >
+                {copied === "testcode" ? "已复制" : "复制测试代码"}
+              </button>
+            )}
             <button
               type="button"
               onClick={() => copyText("full", msg.artifactMd!)}

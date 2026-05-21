@@ -45,6 +45,9 @@ Thumbs.db
 .devstack/
 hf-space/
 
+# Claude Code 本地配置
+.claude/
+
 # 导出产物
 output/chats/
 

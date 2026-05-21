@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime, timezone
 from typing import Any
 
 import redis
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+from config.settings import get_settings
+
+REDIS_URL = get_settings().redis_url
 
 
 def _now_iso() -> str:

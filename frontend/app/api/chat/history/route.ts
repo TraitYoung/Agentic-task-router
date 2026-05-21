@@ -6,6 +6,7 @@ export const runtime = "nodejs";
 
 export async function GET(req: NextRequest) {
   const sessionId = req.headers.get("x-session-id") || undefined;
+  const apiKey = req.headers.get("x-api-key") || undefined;
 
   if (!sessionId) {
     return NextResponse.json({ detail: "missing x-session-id" }, { status: 400 });
@@ -17,6 +18,7 @@ export async function GET(req: NextRequest) {
     "Content-Type": "application/json",
     "x-session-id": sessionId,
   };
+  if (apiKey) headers["x-api-key"] = apiKey;
 
   let backendRes: Response;
   try {

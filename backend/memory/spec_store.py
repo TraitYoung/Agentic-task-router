@@ -82,6 +82,36 @@ class SpecStore:
             """
         )
         self._conn.commit()
+        self._stamp_alembic_if_needed()
+
+    @staticmethod
+    def _alembic_stamp_revision() -> str:
+        """Return the revision that represents the current inline schema."""
+        return "0001_initial_schema"
+
+    def _stamp_alembic_if_needed(self) -> None:
+        """Stamp the alembic_version table if this is a pre-Alembic database.
+
+        Existing databases created by inline _migrate() won't have an
+        alembic_version table.  This method creates one and stamps it
+        with the initial revision so that future ``alembic upgrade head``
+        commands know the schema is already up to date.
+        """
+        cursor = self._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='alembic_version'"
+        )
+        if cursor.fetchone() is not None:
+            return  # Already stamped.
+
+        rev = self._alembic_stamp_revision()
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(32) NOT NULL)"
+        )
+        self._conn.execute(
+            "INSERT INTO alembic_version (version_num) VALUES (?)", (rev,)
+        )
+        self._conn.commit()
+        logger.info("alembic stamped with revision %s (pre-existing database)", rev)
 
     # ── 正向规格存取 ──────────────────────────────────────
 

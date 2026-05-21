@@ -1,6 +1,6 @@
 "use client";
 
-import type { RefObject, KeyboardEvent, FormEvent } from "react";
+import { useState, type RefObject, type KeyboardEvent, type FormEvent } from "react";
 import { shouldSendOnEnter } from "./chatComposer";
 import type { UiMode } from "./types";
 
@@ -11,8 +11,10 @@ interface Props {
   readyToSend: boolean;
   isComposing: boolean;
   stackOk: boolean | null;
+  apiKey: string;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   onTextChange: (text: string) => void;
+  onApiKeyChange: (key: string) => void;
   onSend: () => void;
   onStop: () => void;
   onKeyDown: (e: KeyboardEvent<HTMLTextAreaElement>) => void;
@@ -27,14 +29,18 @@ export function Composer({
   readyToSend,
   isComposing,
   stackOk,
+  apiKey,
   textareaRef,
   onTextChange,
+  onApiKeyChange,
   onSend,
   onStop,
   onKeyDown,
   onCompositionStart,
   onCompositionEnd,
 }: Props) {
+  const [keyVisible, setKeyVisible] = useState(false);
+
   function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     onSend();
@@ -49,10 +55,31 @@ export function Composer({
               {mode === "spec" ? "需求规格输入区" : "代码审查输入区"}
             </div>
             <div className="flex items-center gap-3 text-[11px] text-zinc-400">
+              <button
+                type="button"
+                onClick={() => setKeyVisible(!keyVisible)}
+                className="hover:text-zinc-600 transition-colors"
+                aria-label="API Key 设置"
+              >
+                {apiKey ? "已设置 Key" : "设置 Key"}
+              </button>
               <span>{isComposing ? "输入法确认中..." : "Enter 发送"}</span>
               <span>{text.length > 0 ? `${text.length}/12k` : "最多 12k"}</span>
             </div>
           </div>
+
+          {keyVisible && (
+            <div className="px-1 pb-3">
+              <input
+                type="password"
+                value={apiKey}
+                onChange={(e) => onApiKeyChange(e.target.value)}
+                placeholder="输入 API Key（x-api-key）"
+                className="w-full rounded-xl border border-[color:var(--line)] bg-white px-3 py-2 text-xs text-zinc-700 placeholder-zinc-400 focus:outline-none focus:border-[rgba(201,111,59,0.45)] transition-colors"
+                autoComplete="off"
+              />
+            </div>
+          )}
 
           <div
             className={`flex items-end gap-3 rounded-[1.5rem] border border-[color:var(--line)] bg-white px-4 py-3 transition-colors focus-within:border-[rgba(201,111,59,0.45)] ${

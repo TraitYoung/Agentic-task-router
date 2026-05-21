@@ -26,17 +26,9 @@ _LIST_JSON_HINT = "所有列表字段的元素必须是字符串，禁止使用 
 
 
 def uses_json_prompt_structured() -> bool:
-    import os
+    from config.settings import Settings
 
-    mode = os.getenv("LLM_STRUCTURED_MODE", "").strip().lower()
-    base = llm_base_url().lower()
-    if mode in ("native", "openai", "dashscope"):
-        return False
-    if mode in ("json_prompt", "prompt", "moonshot"):
-        return True
-    if "dashscope" in base:
-        return False
-    return "moonshot" in base
+    return Settings().uses_json_prompt_structured()
 
 
 def prepare_system_content(system_content: str) -> str:
@@ -171,6 +163,11 @@ _SCHEMA_EXAMPLES: dict[str, dict[str, object]] = {
         "definition_of_done": ["DoD 条目"],
         "ci_cd_notes": ["CI 说明"],
         "sprint_retrospective_one_liner": "回顾一句",
+    },
+    "DevTestBundle": {
+        "files": [
+            {"path": "src/__tests__/app.test.ts", "code": "import { describe, it, expect } from 'vitest';\n\ndescribe('app', () => { it('works', () => { expect(1).toBe(1); }); });"}
+        ],
     },
     "ReverseEngineerSpec": {
         "inferred_goal": "推测的业务目标",

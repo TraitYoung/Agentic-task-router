@@ -20,13 +20,16 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - name: Install dependencies
-        run: pip install -r requirements.txt pytest
+        run: pip install -r requirements.txt pytest ruff
+
+      - name: Lint
+        run: ruff check backend/
 
       - name: Compile check
         run: python -m compileall backend -q
 
       - name: Tests
-        run: pytest -q
+        run: pytest -q --ignore=tests/test_e2e_llm.py
 
   frontend:
     name: Frontend (Next.js)
@@ -44,9 +47,17 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+
       - name: Typecheck
         working-directory: frontend
         run: npx tsc --noEmit
+
+      - name: Test
+        working-directory: frontend
+        run: npm run test
 
       - name: Build
         working-directory: frontend

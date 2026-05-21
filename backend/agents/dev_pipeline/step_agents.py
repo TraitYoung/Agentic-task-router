@@ -19,6 +19,7 @@ from schemas.workflows import (
     DevCodeSketch,
     DevOutline,
     DevTaskSpec,
+    DevTestBundle,
     DevTestsChangelog,
     ReverseEngineerSpec,
 )
@@ -57,6 +58,12 @@ DELIVERY_CFG = StepConfig(
     step_id="delivery_review",
     node="workflow.se.delivery_review",
     role="QA + 发布协调",
+)
+
+TEST_CODE_CFG = StepConfig(
+    step_id="test_code",
+    node="workflow.se.test_code",
+    role="测试工程师",
 )
 
 MERGE_CFG = StepConfig(
@@ -215,6 +222,43 @@ def run_delivery_step(
             HumanMessage(content=f"上下文 JSON：\n{bundle}"),
         ],
         step_id=DELIVERY_CFG.step_id,
+    )
+
+
+def run_test_code_step(
+    *,
+    llm,
+    discovery: DevTaskSpec,
+    sprint: DevOutline,
+    sketch: DevCodeSketch,
+    delivery: DevTestsChangelog,
+    profile_focus: str,
+) -> DevTestBundle:
+    step_llm = _structured_llm(TEST_CODE_CFG, llm)
+    bundle = _json_clip(
+        {
+            "discovery": discovery.model_dump(),
+            "sprint_design": sprint.model_dump(),
+            "sketch": sketch.model_dump(),
+            "delivery": delivery.model_dump(),
+        },
+        TEST_CODE_CFG.max_context_chars,
+    )
+    return invoke_structured(
+        step_llm,
+        DevTestBundle,
+        [
+            _system(
+                f"你是{TEST_CODE_CFG.role}。基于 JSON 填写 DevTestBundle。\n"
+                f"岗位关注：{profile_focus}。\n"
+                f"{_LIST_RULE}\n"
+                "- files：2~3 个可执行测试文件，path 为仓库相对路径（如 src/__tests__/foo.test.ts）。\n"
+                "- code：完整测试源码，覆盖 delivery.test_cases 前 2 条与 backlog_mvp_ordered 前 2 条。\n"
+                "- 语言与 sketch.language 一致；使用项目常见测试框架（vitest/jest/pytest 等）。"
+            ),
+            HumanMessage(content=f"上下文 JSON：\n{bundle}"),
+        ],
+        step_id=TEST_CODE_CFG.step_id,
     )
 
 
