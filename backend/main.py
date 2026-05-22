@@ -1,5 +1,4 @@
 from uuid import uuid4
-import asyncio
 import json
 import time
 from datetime import datetime, timezone
@@ -17,18 +16,22 @@ from pydantic import BaseModel, Field
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from auth import api_key_middleware
-from config.llm_settings import has_llm_api_key, llm_env_health
-from config.settings import get_settings
+from config.settings import Settings, get_settings
 from config.structured_errors import StructuredStepError
 from config.step_model_routing import resolve_step_llm
 from middleware import RateLimitMiddleware, RequestLogMiddleware
-from agents.workflow_pipelines import run_dev_pipeline, run_reverse_engineer, synthetic_intent_for_workflow
-from agents.dev_pipeline.orchestrator import run_dev_pipeline_stream, run_reverse_engineer_stream
+from agents.dev_pipeline.orchestrator import (
+    run_dev_pipeline,
+    run_dev_pipeline_stream,
+    run_reverse_engineer,
+    run_reverse_engineer_stream,
+)
 from memory.session_cache import SessionCache
 from memory.spec_store import get_spec_store
 from schemas.error_codes import ErrorCode, ErrorResponse
 from schemas.protocols import TaskIntent
 from schemas.trace import TraceStep
+from services.chat_turns import ChatTurnRunner
 from core_logging import configure_stdio_utf8, get_logger, setup_logging
 
 configure_stdio_utf8()
@@ -39,16 +42,16 @@ logger = get_logger("specforge.main")
 app = FastAPI(
     title="SpecForge API",
     description=(
-        "AI 驱动的软件工程规范生成与审查系统。"
-        "将模糊需求转化为结构化工程规格，或将代码反向生成审查报告。"
+        "AI-powered software engineering spec generation and code review API. "
+        "Turns rough ideas into structured specs, or code snippets into review reports."
     ),
     version="3.0.0",
     contact={"name": "SpecForge", "url": "https://github.com/specforge"},
     license_info={"name": "MIT"},
     openapi_tags=[
-        {"name": "health", "description": "服务健康与存活探针"},
-        {"name": "chat", "description": "规范生成与代码审查对话端点"},
-        {"name": "export", "description": "会话导出与历史查询"},
+        {"name": "health", "description": "Service health and liveness probes"},
+        {"name": "chat", "description": "Spec generation and code review chat endpoints"},
+        {"name": "export", "description": "Conversation export and history"},
     ],
 )
 STARTED_AT = time.monotonic()
@@ -88,7 +91,7 @@ app.middleware("http")(api_key_middleware)
 session_cache = SessionCache(ttl_seconds=3600, window_size=5)
 spec_store = get_spec_store()
 
-if not has_llm_api_key():
+if not Settings().has_api_key():
     logger.warning(
         "LLM_API_KEY not set — LLM calls will fail. "
         "Copy .env.example to .env and set LLM_API_KEY."
@@ -175,7 +178,7 @@ def api_health():
         "sqlite": sqlite_status,
         "memory_mb": _memory_mb(),
         "env": {
-            **llm_env_health(),
+            **Settings().llm_env_health(),
             "has_redis_url": bool(settings.redis_url),
         },
     }
@@ -244,221 +247,24 @@ class ChatHistoryResponse(BaseModel):
     turns: List[ChatExportItem] = Field(..., description="对话轮次列表")
 
 
-# ── Pipeline execution ─────────────────────────
+# Service layer
 
-def _execute_turn(payload: ChatRequest, session_id: str):
-    store = get_spec_store()
-    retrieval_context = ""
-
-    if payload.mode == "review":
-        top_issues = store.get_top_issues(limit=8)
-        if top_issues:
-            retrieval_context = "高频问题模式（按频率降序）:\n" + "\n".join(
-                f"- [{i['issue_type']}] {i['issue_text']}（出现 {i['frequency']} 次）"
-                for i in top_issues
-            )
-        llm = resolve_step_llm("reverse_engineer", None)
-        pipeline = run_reverse_engineer(payload.text, llm, retrieval_context=retrieval_context)
-    else:
-        past_specs = store.search_specs(payload.text, mode="spec", limit=3)
-        if past_specs:
-            parts: list[str] = []
-            for s in past_specs:
-                stories = _parse_json_field(s.get("user_stories", "[]"))
-                modules = _parse_json_field(s.get("modules", "[]"))
-                parts.append(
-                    f"• 目标:{s['goal']}\n"
-                    f"  用户故事:{', '.join(stories) if stories else '无'}\n"
-                    f"  模块:{', '.join(modules) if modules else '无'}"
-                )
-            retrieval_context = "\n".join(parts)
-        llm = resolve_step_llm("discovery", None)
-        pipeline = run_dev_pipeline(payload.text, llm, retrieval_context=retrieval_context)
-
-    trace_raw = pipeline.steps
-    profile = _extract_profile(trace_raw)
-    try:
-        if payload.mode == "review":
-            _save_review_issues(store, trace_raw, profile)
-        else:
-            _save_spec_result(store, trace_raw, payload.text, profile)
-    except Exception as exc:
-        logger.warning("save to spec_store failed: %s", exc)
-
-    intent = synthetic_intent_for_workflow(payload.text)
-    reply = pipeline.summary
-    return (
-        reply,
-        intent,
-        trace_raw,
-        payload.mode,
-        pipeline.artifact_md,
-        pipeline.artifact_path,
-        pipeline.artifact_filename,
-    )
+chat_turn_runner = ChatTurnRunner(
+    store_factory=get_spec_store,
+    session_cache=session_cache,
+    resolve_llm=resolve_step_llm,
+    run_spec=run_dev_pipeline,
+    run_review=run_reverse_engineer,
+    run_spec_stream=run_dev_pipeline_stream,
+    run_review_stream=run_reverse_engineer_stream,
+)
 
 
-async def _execute_turn_stream(payload: ChatRequest, session_id: str):
-    """流式执行流水线:通过 asyncio.Queue 推送状态/delta 事件。"""
-    store = get_spec_store()
-    event_queue: asyncio.Queue = asyncio.Queue(maxsize=256)
-
-    retrieval_context = ""
-    if payload.mode == "review":
-        top_issues = store.get_top_issues(limit=8)
-        if top_issues:
-            retrieval_context = "高频问题模式（按频率降序）:\n" + "\n".join(
-                f"- [{i['issue_type']}] {i['issue_text']}（出现 {i['frequency']} 次）"
-                for i in top_issues
-            )
-    else:
-        past_specs = store.search_specs(payload.text, mode="spec", limit=3)
-        if past_specs:
-            parts: list[str] = []
-            for s in past_specs:
-                stories = _parse_json_field(s.get("user_stories", "[]"))
-                modules = _parse_json_field(s.get("modules", "[]"))
-                parts.append(
-                    f"• 目标:{s['goal']}\n"
-                    f"  用户故事:{', '.join(stories) if stories else '无'}\n"
-                    f"  模块:{', '.join(modules) if modules else '无'}"
-                )
-            retrieval_context = "\n".join(parts)
-
-    loop = asyncio.get_running_loop()
-
-    def _run_sync():
-        llm = resolve_step_llm("discovery" if payload.mode != "review" else "reverse_engineer", None)
-        if payload.mode == "review":
-            return run_reverse_engineer_stream(
-                payload.text, llm, retrieval_context=retrieval_context, event_queue=event_queue
-            )
-        else:
-            return run_dev_pipeline_stream(
-                payload.text, llm, retrieval_context=retrieval_context, event_queue=event_queue
-            )
-
-    future = loop.run_in_executor(None, _run_sync)
-
-    while True:
-        try:
-            event = await asyncio.wait_for(event_queue.get(), timeout=0.1)
-            yield event
-        except asyncio.TimeoutError:
-            if future.done():
-                while not event_queue.empty():
-                    try:
-                        yield event_queue.get_nowait()
-                    except asyncio.QueueEmpty:
-                        break
-                break
-
-    pipeline = future.result()
-    trace_raw = pipeline.steps
-
-    profile = _extract_profile(trace_raw)
-    try:
-        if payload.mode == "review":
-            _save_review_issues(store, trace_raw, profile)
-        else:
-            _save_spec_result(store, trace_raw, payload.text, profile)
-    except Exception as exc:
-        logger.warning("save to spec_store failed (stream): %s", exc)
-
-    try:
-        intent = synthetic_intent_for_workflow(payload.text)
-        session_cache.append_turn(
-            session_id=session_id,
-            user_text=payload.text,
-            assistant_text=pipeline.summary,
-        )
-    except Exception as exc:
-        logger.warning("Redis append_turn failed: %s", exc)
-        intent = synthetic_intent_for_workflow(payload.text)
-
-    trace_payload = [TraceStep.model_validate(s).model_dump() for s in trace_raw]
-
-    yield {
-        "type": "artifact",
-        "format": "markdown",
-        "filename": pipeline.artifact_filename,
-        "file_path": pipeline.artifact_path,
-        "content": pipeline.artifact_md,
-    }
-    yield {"type": "reply", "content": pipeline.summary}
-    yield {
-        "type": "meta",
-        "session_id": session_id,
-        "intent": intent.model_dump(),
-        "trace_id": "",
-        "trace": trace_payload,
-        "mode": payload.mode,
-    }
-    yield {"type": "done"}
-
-
-def _parse_json_field(raw: str) -> list[str]:
-    if not raw:
-        return []
-    try:
-        parsed = json.loads(raw)
-        if isinstance(parsed, list):
-            return [str(x) for x in parsed]
-        return []
-    except (json.JSONDecodeError, TypeError):
-        return []
-
-
-def _extract_profile(trace_raw: list) -> str:
-    if trace_raw and isinstance(trace_raw[0], dict):
-        return str(trace_raw[0].get("summary", {}).get("profile", ""))
-    return ""
-
-
-def _save_spec_result(store, trace_raw: list, user_text: str, profile: str) -> None:
-    if not trace_raw:
-        return
-
-    discovery = trace_raw[0].get("summary", {}).get("discovery", {})
-    sprint_design = (
-        trace_raw[1].get("summary", {}).get("sprint_design", {})
-        if len(trace_raw) > 1
-        else {}
-    )
-
-    store.save_spec(
-        mode="spec",
-        profile=profile,
-        user_text=user_text[:500],
-        goal=str(discovery.get("goal", user_text[:200])),
-        user_stories=list(discovery.get("user_stories", [])),
-        modules=list(sprint_design.get("modules", [])),
-        full_summary=json.dumps(
-            {"discovery": discovery, "sprint": sprint_design},
-            ensure_ascii=False,
-        )[:4000],
-    )
-
-
-def _save_review_issues(store, trace_raw: list, profile: str) -> None:
-    if not trace_raw:
-        return
-
-    spec = trace_raw[0].get("summary", {}).get("reverse_engineer", {})
-    issues: list[dict[str, str]] = []
-
-    for item in spec.get("architecture_issues", []):
-        issues.append({"type": "architecture", "text": str(item), "suggestion": ""})
-    for item in spec.get("code_quality_issues", []):
-        issues.append({"type": "code_quality", "text": str(item), "suggestion": ""})
-
-    suggestions = [str(s) for s in spec.get("improvement_plan", [])]
-    for i, issue in enumerate(issues):
-        if i < len(suggestions):
-            issue["suggestion"] = suggestions[i]
-
-    if issues:
-        store.save_issues(profile=profile, issues=issues)
+def _build_turn_items(turns: list[dict]) -> list[ChatExportItem]:
+    return [
+        ChatExportItem(user=t.get("user", ""), assistant=t.get("assistant", ""), ts=t.get("ts", ""))
+        for t in turns
+    ]
 
 
 # ── Endpoints ──────────────────────────────────
@@ -487,9 +293,7 @@ async def chat_api(
     response.headers["X-Trace-Id"] = trace_id
 
     try:
-        reply, intent, trace_raw, _mode, artifact_md, artifact_path, artifact_filename = _execute_turn(
-            payload, session_id
-        )
+        result = chat_turn_runner.execute(payload.mode, payload.text, session_id)
     except HTTPException:
         raise
     except Exception as exc:
@@ -503,25 +307,16 @@ async def chat_api(
         err = _turn_error_payload(exc)
         raise HTTPException(status_code=500, detail=err["detail"]) from exc
 
-    try:
-        session_cache.append_turn(
-            session_id=session_id,
-            user_text=payload.text,
-            assistant_text=reply,
-        )
-    except Exception:
-        pass
-
-    trace = [TraceStep.model_validate(s) for s in trace_raw]
+    trace = [TraceStep.model_validate(s) for s in result.trace_raw]
     return ChatResponse(
         session_id=session_id,
-        reply=reply,
-        intent=intent,
+        reply=result.reply,
+        intent=result.intent,
         trace_id=trace_id,
         trace=trace,
-        artifact_md=artifact_md,
-        artifact_path=artifact_path,
-        artifact_filename=artifact_filename,
+        artifact_md=result.artifact_md,
+        artifact_path=result.artifact_path,
+        artifact_filename=result.artifact_filename,
     )
 
 
@@ -546,7 +341,7 @@ async def chat_stream_api(
 
     async def event_gen():
         try:
-            async for event in _execute_turn_stream(payload, session_id):
+            async for event in chat_turn_runner.execute_stream(payload.mode, payload.text, session_id):
                 if event.get("type") == "meta":
                     event["trace_id"] = trace_id
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
@@ -610,15 +405,9 @@ async def chat_export_api(
     filename = f"{ts}_{safe_title}.jsonl"
     file_path = export_dir / filename
 
-    items: List[ChatExportItem] = []
+    items = _build_turn_items(turns)
     with file_path.open("w", encoding="utf-8") as f:
-        for t in turns:
-            item = ChatExportItem(
-                user=t.get("user", ""),
-                assistant=t.get("assistant", ""),
-                ts=t.get("ts", ""),
-            )
-            items.append(item)
+        for item in items:
             f.write(item.model_dump_json(ensure_ascii=False) + "\n")
 
     rel_path = str(file_path.relative_to(REPO_ROOT))
@@ -647,14 +436,5 @@ async def chat_history_api(
     if not turns_raw:
         return ChatHistoryResponse(session_id=x_session_id, turns=[])
 
-    items: List[ChatExportItem] = []
-    for t in turns_raw:
-        items.append(
-            ChatExportItem(
-                user=t.get("user", ""),
-                assistant=t.get("assistant", ""),
-                ts=t.get("ts", ""),
-            )
-        )
-
+    items = _build_turn_items(turns_raw)
     return ChatHistoryResponse(session_id=x_session_id, turns=items)

@@ -1,14 +1,15 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getBackendBaseUrl } from "@/lib/backend";
+import {
+  backendConnectionError,
+  buildBackendUrl,
+  forwardedBackendHeaders,
+} from "@/lib/backend";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
-  const sessionId = req.headers.get("x-session-id") || undefined;
-  const traceId = req.headers.get("x-trace-id") || undefined;
-
   let payload: { text?: string; mode?: string } = {};
   try {
     payload = await req.json();
@@ -21,20 +22,12 @@ export async function POST(req: NextRequest) {
   }
 
   const backendBody: Record<string, string> = { text: payload.text };
-  if (payload.mode) {
-    backendBody.mode = payload.mode;
-  }
+  if (payload.mode) backendBody.mode = payload.mode;
 
-  const backendUrl = `${getBackendBaseUrl()}/api/v1/chat/stream`;
+  const headers = forwardedBackendHeaders(req, { includeTrace: true });
+  if (headers instanceof NextResponse) return headers;
 
-  const apiKey = req.headers.get("x-api-key") || undefined;
-
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
-  if (sessionId) headers["x-session-id"] = sessionId;
-  if (traceId) headers["x-trace-id"] = traceId;
-  if (apiKey) headers["x-api-key"] = apiKey;
+  const backendUrl = buildBackendUrl("/api/v1/chat/stream");
 
   let backendRes: Response;
   try {
@@ -44,19 +37,15 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify(backendBody),
       signal: AbortSignal.timeout(600_000),
     });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json(
-      { detail: `无法连接 FastAPI（${backendUrl}）：${msg}` },
-      { status: 503 }
-    );
+  } catch (error) {
+    return backendConnectionError(backendUrl, error);
   }
 
   if (!backendRes.ok || !backendRes.body) {
     const text = await backendRes.text().catch(() => "");
     return NextResponse.json(
       { detail: "backend request failed", status: backendRes.status, text },
-      { status: 500 }
+      { status: 500 },
     );
   }
 
@@ -68,10 +57,8 @@ export async function POST(req: NextRequest) {
   const backendTrace = backendRes.headers.get("x-trace-id");
   if (backendTrace) outHeaders["x-trace-id"] = backendTrace;
 
-  // 直接透传 SSE 流：让浏览器接收 data: ...\n\n 事件
   return new Response(backendRes.body, {
     status: backendRes.status,
     headers: outHeaders,
   });
 }
-

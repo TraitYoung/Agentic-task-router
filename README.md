@@ -1,3 +1,18 @@
+# SpecForge - AI Software Engineering Spec Generator
+
+SpecForge is a full-stack resume project for AI Coding workflows. It turns rough product ideas or code snippets into structured engineering artifacts: requirement discovery, sprint planning, implementation sketches, test plans, generated test drafts, and code review reports.
+
+Highlights:
+
+- FastAPI + Next.js end-to-end app with SSE streaming and session history.
+- Pydantic v2 structured outputs to reduce drift in multi-step LLM workflows.
+- SQLite FTS5 lightweight retrieval memory for prior specs and recurring review issues.
+- Full trace output for pipeline step duration, summaries, and runtime metrics.
+- Backend structure split into API routes, services, pipeline orchestration, and memory storage so the engineering boundaries are easy to explain in interviews.
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the implementation map.
+
+---
 🔗 Live Demo: https://spec-forge-phi.vercel.app/
 
 🔎 Backend Health: https://ishowrelx5-specforge-api.hf.space/api/v1/health
@@ -143,7 +158,6 @@ cd frontend && npm install && npm run dev
 │   │   └── trace.py                     # TraceStep
 │   ├── memory/
 │   │   ├── session_cache.py             # Redis 会话缓存
-│   │   ├── project_cache.py             # 项目记忆
 │   │   └── spec_store.py                # SQLite FTS5 规格检索
 │   └── prompts/
 │       └── dev_pipeline_profiles.py     # 5 种项目画像检测

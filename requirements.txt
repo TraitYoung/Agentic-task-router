@@ -16,3 +16,4 @@ markdown
 playwright
 psutil
 alembic
+prometheus-fastapi-instrumentator

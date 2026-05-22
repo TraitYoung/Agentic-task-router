@@ -10,7 +10,6 @@ from typing import Any, TypeVar
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, ValidationError
 
-from config.llm_settings import llm_base_url
 from config.structured_errors import StructuredStepError
 
 logger = logging.getLogger("specforge.structured_invoke")

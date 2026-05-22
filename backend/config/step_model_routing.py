@@ -7,21 +7,13 @@ from typing import Dict
 
 from langchain_openai import ChatOpenAI
 
-from config.llm_settings import (
-    llm_api_key,
-    llm_base_url,
-    llm_max_tokens,
-    llm_model_kwargs,
-    llm_request_timeout,
-    llm_step_model,
-    llm_structured_model_kwargs,
-)
+from config.settings import Settings
 
 _CACHE: Dict[str, ChatOpenAI] = {}
 
 
 def step_model_name(step_id: str) -> str:
-    return llm_step_model(step_id)
+    return Settings().step_model(step_id)
 
 
 def resolve_step_llm(step_id: str, fallback_llm, *, structured: bool = False):
@@ -31,16 +23,17 @@ def resolve_step_llm(step_id: str, fallback_llm, *, structured: bool = False):
     - 若缺关键配置，回退到 fallback_llm
     - structured=True 时使用 LLM_STRUCTURED_THINKING（若配置）以节省 JSON 输出 token
     """
-    api_key = llm_api_key()
-    base_url = llm_base_url()
+    settings = Settings()
+    api_key = settings.llm_api_key
+    base_url = settings.llm_base_url
     model = step_model_name(step_id)
     if not api_key:
         return fallback_llm
 
-    max_tokens = llm_max_tokens(step_id)
-    model_kwargs = llm_structured_model_kwargs() if structured else llm_model_kwargs()
+    max_tokens = settings.step_max_tokens(step_id)
+    model_kwargs = settings.structured_model_kwargs() if structured else settings.model_kwargs()
     kwargs_key = json.dumps(model_kwargs, sort_keys=True, default=str)
-    cache_key = f"{model}|{base_url}|{step_id}|{max_tokens}|{structured}|{llm_request_timeout()}|{kwargs_key}"
+    cache_key = f"{model}|{base_url}|{step_id}|{max_tokens}|{structured}|{settings.llm_request_timeout}|{kwargs_key}"
     if cache_key in _CACHE:
         return _CACHE[cache_key]
 
@@ -48,7 +41,7 @@ def resolve_step_llm(step_id: str, fallback_llm, *, structured: bool = False):
         model=model,
         api_key=api_key,
         base_url=base_url,
-        timeout=llm_request_timeout(),
+        timeout=settings.llm_request_timeout,
         max_retries=2,
         max_tokens=max_tokens,
         model_kwargs=model_kwargs,

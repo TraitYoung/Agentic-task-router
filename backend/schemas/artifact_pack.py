@@ -1,14 +1,12 @@
-"""聊天摘要与 SPEC.md / REVIEW.md 实现包组装、落盘。"""
+"""聊天摘要与 SPEC.md / REVIEW.md 实现包组装。"""
 
 from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Mapping
 
 from config.context_budget import clip_text
-from repo_paths import REPO_ROOT
 from schemas.workflows import (
     DevCodeSketch,
     DevOutline,
@@ -89,14 +87,6 @@ def format_test_bundle_plain(bundle: DevTestBundle | None) -> str:
         header = f"// {item.path}\n" if item.path.strip() else ""
         chunks.append(f"{header}{item.code.strip()}")
     return "\n\n".join(chunks)
-
-
-def _safe_slug(text: str, max_len: int = 24) -> str:
-    line = (text.splitlines()[0] if text else "session").strip()
-    if len(line) > max_len:
-        line = line[:max_len]
-    slug = "".join(ch for ch in line if ch not in '\\/:*?"<>|' and ord(ch) >= 32).strip()
-    return slug or "session"
 
 
 def build_spec_artifact_md(
@@ -316,25 +306,3 @@ def extract_generated_test_files(artifact_md: str) -> str:
 
 def extract_review_prompt(artifact_md: str) -> str:
     return extract_section(artifact_md, REVIEW_PROMPT_HEADING)
-
-
-def save_artifact_md(
-    content: str,
-    user_prompt: str,
-    *,
-    mode: str = "spec",
-) -> tuple[str, str]:
-    """
-    写入 output/chats/{ts}_{slug}_SPEC.md 或 _REVIEW.md。
-    返回 (filename, repo_relative_path)。
-    """
-    export_dir = REPO_ROOT / "output" / "chats"
-    export_dir.mkdir(parents=True, exist_ok=True)
-    suffix = "REVIEW" if mode == "review" else "SPEC"
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    slug = _safe_slug(user_prompt)
-    filename = f"{ts}_{slug}_{suffix}.md"
-    path = export_dir / filename
-    path.write_text(content, encoding="utf-8")
-    rel = str(path.relative_to(REPO_ROOT)).replace("\\", "/")
-    return filename, rel
