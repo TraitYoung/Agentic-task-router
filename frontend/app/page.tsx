@@ -6,6 +6,7 @@ import type { TraceStepRow, Message, UiMode } from "./types";
 import { parseSseEvent } from "./lib";
 import { AssistantBubble, UserBubble } from "./Bubble";
 import { Composer } from "./Composer";
+import { KnowledgeModal } from "./KnowledgeModal";
 import { PipelineProgress } from "./PipelineProgress";
 import {
   normalizePipelineStep,
@@ -17,6 +18,7 @@ import { ErrorBoundary } from "./ErrorBoundary";
 
 export default function Home() {
   const [mode, setMode] = useState<UiMode>("spec");
+  const [knowledgeOpen, setKnowledgeOpen] = useState(false);
   const [sessionId, setSessionId] = useState<string>(() => {
     try {
       const cached = window.localStorage.getItem("x-session-id");
@@ -432,6 +434,14 @@ export default function Home() {
 
               <button
                 type="button"
+                onClick={() => setKnowledgeOpen(true)}
+                className="rounded-full border border-[color:var(--line)] bg-white/80 px-3 py-2 text-xs text-zinc-500 shadow-sm transition-colors hover:text-zinc-800"
+              >
+                知识库
+              </button>
+
+              <button
+                type="button"
                 onClick={() => void onExport()}
                 disabled={exporting || messages.length === 0}
                 className="rounded-full border border-[color:var(--line)] bg-white/80 px-3 py-2 text-xs text-zinc-500 shadow-sm transition-colors hover:text-zinc-800 disabled:opacity-30"
@@ -520,6 +530,7 @@ export default function Home() {
           onCompositionEnd={() => safeSetComposing(false)}
         />
       </div>
+      <KnowledgeModal open={knowledgeOpen} onClose={() => setKnowledgeOpen(false)} />
     </ErrorBoundary>
   );
 }

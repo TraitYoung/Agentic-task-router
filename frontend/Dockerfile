@@ -23,6 +23,9 @@ COPY --from=builder /app/next.config.ts ./
 ENV NODE_ENV=production
 ENV PORT=3000
 
+RUN addgroup -S app && adduser -S app -G app && chown -R app:app /app
+USER app
+
 EXPOSE 3000
 
 CMD ["npm", "start"]

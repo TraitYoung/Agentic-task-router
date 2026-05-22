@@ -32,6 +32,9 @@ class FakeStore:
     def save_issues(self, **kwargs):
         self.saved_issues.append(kwargs)
 
+    def search_knowledge(self, query, limit=5):
+        return []
+
 
 def test_spec_retrieval_context_formats_prior_specs():
     from services.retrieval_context import build_retrieval_context

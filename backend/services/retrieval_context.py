@@ -1,4 +1,17 @@
-"""Build retrieval context snippets for pipeline prompts."""
+"""RAG 检索上下文构建器。
+
+检索链路：
+  1. 用户输入（spec 模式：产品想法；review 模式：代码片段）
+  2. SQLite FTS5 全文检索 — 匹配历史 spec（goal/user_stories/modules）或历史 review issues
+  3. 检索结果注入 pipeline prompt 的 retrieval_context 字段
+  4. 各 Step Agent 在 system prompt 中接收该上下文，作为"历史经验"辅助生成
+
+spec 模式下检索 Top-3 相似历史 spec，提取其 goal + user_stories + modules 作为参考。
+review 模式下检索 Top-8 高频 issue 及其 suggestion，帮助发现重复问题模式。
+
+FTS5 对中文分词有限（内置 tokenizer），自动降级到 LIKE 通配符模糊匹配，
+确保中文查询不因分词问题漏检。
+"""
 
 from __future__ import annotations
 
@@ -47,8 +60,27 @@ def _review_context(store: Any) -> str:
     )
 
 
+def _knowledge_context(store: Any, text: str) -> str:
+    docs = store.search_knowledge(text, limit=3)
+    if not docs:
+        return ""
+    parts: list[str] = []
+    for doc in docs:
+        snippet = doc["content"][:300]
+        parts.append(f"- [{doc['title']}] {snippet}")
+    return "相关知识文档:\n" + "\n".join(parts)
+
+
 def build_retrieval_context(store: Any, *, mode: Mode, text: str) -> str:
+    parts: list[str] = []
     if mode == "review":
-        return _review_context(store)
-    return _spec_context(store, text)
+        ctx = _review_context(store)
+    else:
+        ctx = _spec_context(store, text)
+    if ctx:
+        parts.append(ctx)
+    kn_ctx = _knowledge_context(store, text)
+    if kn_ctx:
+        parts.append(kn_ctx)
+    return "\n\n".join(parts)
 

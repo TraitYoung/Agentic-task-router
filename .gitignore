@@ -51,6 +51,9 @@ hf-space/
 # 导出产物
 output/chats/
 
+# 面试资料
+docs/AI全栈工程师_职位描述.md
+
 # 临时脚本或本地工具（如你不想公开）
 scripts/inspect_q2.py
 scripts/insert_career_nuke.py

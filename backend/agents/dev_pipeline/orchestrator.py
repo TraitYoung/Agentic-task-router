@@ -1,4 +1,23 @@
-"""A 方向 orchestrator：discovery → sprint → implementation → delivery → test_code → merge。"""
+"""Multi-Agent 流水线编排器。
+
+正向工程（spec）6 步顺序流水线：
+  Discovery Agent  → 需求分析，拆分用户故事与验收条件
+  Sprint Agent     → 架构设计，输出模块划分与 Sprint 待办
+  Implementation   → 代码实现草案（含目录结构 + 组件接口）
+  Delivery Agent   → 对照草案编写测试方案与 DoD 清单
+  Test Code Agent  → 生成可粘贴的测试代码草案
+  Merge Agent      → 汇总发布说明，合并为 SPEC.md 工件
+
+逆向审查（review）单步：
+  Reverse Engineer Agent → 从代码反推架构/需求，输出 REVIEW.md
+
+每个 Agent：
+  - 独立 system prompt（step_agents.py）
+  - 独立结构化输出 schema（schemas/workflows.py）
+  - 可按步骤路由到不同模型（config/step_model_routing.py）
+  - 接收 RAG 检索上下文（历史 spec/高频 issue）作为参考
+  - 支持同步 + SSE 流式双模式（共享同一核心函数）
+"""
 
 from __future__ import annotations
 

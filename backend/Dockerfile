@@ -9,4 +9,7 @@ COPY backend/ backend/
 
 ENV PYTHONUNBUFFERED=1
 
+RUN useradd --create-home --shell /bin/bash app && chown -R app:app /app
+USER app
+
 CMD ["sh", "-c", "uvicorn main:app --app-dir backend --host 0.0.0.0 --port ${PORT:-8000}"]

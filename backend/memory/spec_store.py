@@ -1,5 +1,13 @@
 """SpecStore: SQLite FTS5 持久化检索 — 正向规格复用 + 逆向高频问题积累。
 
+检索策略：
+  - 主路径：FTS5 全文索引（BM25 相关性排序），覆盖 goal/user_stories/modules 字段
+  - 降级路径：中文 LIKE 通配符模糊匹配（SQLite FTS5 内置 tokenizer 对中文分词有限）
+  - 去重逻辑：review issues 按 (issue_text, type) 判定重复，重复则递增 frequency 计数
+
+每插入一条 spec 或 issue 后，AFTER INSERT 触发器自动同步到 FTS5 虚拟表，
+保证全文索引与原始表一致。
+
 数据库文件：data/spec_store.db（由 .gitignore 忽略）
 """
 
@@ -78,6 +86,20 @@ class SpecStore:
             CREATE TRIGGER IF NOT EXISTS review_issues_ai AFTER INSERT ON review_issues BEGIN
                 INSERT INTO review_issues_fts(rowid, profile, issue_type, issue_text, suggestion)
                 VALUES (new.id, new.profile, new.issue_type, new.issue_text, new.suggestion);
+            END;
+
+            CREATE TABLE IF NOT EXISTS knowledge (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL DEFAULT '',
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts
+                USING fts5(title, content, content='knowledge', content_rowid='id');
+
+            CREATE TRIGGER IF NOT EXISTS knowledge_ai AFTER INSERT ON knowledge BEGIN
+                INSERT INTO knowledge_fts(rowid, title, content)
+                VALUES (new.id, new.title, new.content);
             END;
             """
         )
@@ -292,6 +314,56 @@ class SpecStore:
             (*params, limit),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    # ── 知识库存取 ──────────────────────────────────────
+
+    def save_knowledge(self, *, title: str, content: str) -> int:
+        """保存一条知识文档，返回 row id。"""
+        cur = self._conn.execute(
+            "INSERT INTO knowledge (title, content, created_at) VALUES (?, ?, ?)",
+            (title, content, _now_iso()),
+        )
+        self._conn.commit()
+        logger.info("knowledge saved: title=%s len=%d", title[:80], len(content))
+        return cur.lastrowid
+
+    def search_knowledge(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
+        """FTS5 检索知识库，中文回退 LIKE。返回 title + content 摘要。"""
+        if not query.strip():
+            return []
+        q = query.strip().replace('"', '')
+        try:
+            rows = self._conn.execute(
+                """SELECT k.title, k.content, k.created_at
+                   FROM knowledge_fts f
+                   JOIN knowledge k ON k.id = f.rowid
+                   WHERE knowledge_fts MATCH ?
+                   ORDER BY rank
+                   LIMIT ?""",
+                (q, limit),
+            ).fetchall()
+        except sqlite3.OperationalError as exc:
+            logger.warning("knowledge FTS search failed, falling back to LIKE: %s", exc)
+            rows = []
+
+        if not rows:
+            like_q = f"%{_like_query(q) or q}%"
+            rows = self._conn.execute(
+                """SELECT title, content, created_at
+                   FROM knowledge
+                   WHERE title LIKE ? OR content LIKE ?
+                   ORDER BY created_at DESC
+                   LIMIT ?""",
+                (like_q, like_q, limit),
+            ).fetchall()
+
+        return [dict(r) for r in rows]
+
+    def close(self) -> None:
+        try:
+            self._conn.close()
+        except Exception:
+            pass
 
 
 # 模块级单例

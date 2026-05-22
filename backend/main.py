@@ -247,6 +247,26 @@ class ChatHistoryResponse(BaseModel):
     turns: List[ChatExportItem] = Field(..., description="对话轮次列表")
 
 
+class KnowledgeUploadRequest(BaseModel):
+    content: str = Field(
+        ...,
+        min_length=1,
+        max_length=50000,
+        description="知识文档内容（Markdown/纯文本）",
+    )
+    title: str = Field(
+        default="",
+        max_length=500,
+        description="文档标题（可选）",
+    )
+
+
+class KnowledgeUploadResponse(BaseModel):
+    id: int = Field(..., description="文档 ID")
+    title: str = Field(..., description="文档标题")
+    content_len: int = Field(..., description="内容长度")
+
+
 # Service layer
 
 chat_turn_runner = ChatTurnRunner(
@@ -438,3 +458,24 @@ async def chat_history_api(
 
     items = _build_turn_items(turns_raw)
     return ChatHistoryResponse(session_id=x_session_id, turns=items)
+
+
+@app.post(
+    "/api/v1/knowledge/upload",
+    response_model=KnowledgeUploadResponse,
+    tags=["knowledge"],
+    summary="上传知识文档",
+    description="将 Markdown/纯文本文档写入知识库，供 RAG 检索增强。",
+    responses={
+        200: {"description": "上传成功"},
+        422: {"description": "请求参数校验失败"},
+    },
+)
+async def knowledge_upload_api(payload: KnowledgeUploadRequest):
+    store = get_spec_store()
+    doc_id = store.save_knowledge(
+        title=payload.title or payload.content.splitlines()[0][:80] if payload.content.splitlines() else "untitled",
+        content=payload.content,
+    )
+    title = payload.title or payload.content.splitlines()[0][:80] if payload.content.splitlines() else ""
+    return KnowledgeUploadResponse(id=doc_id, title=title, content_len=len(payload.content))
