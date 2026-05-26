@@ -73,6 +73,45 @@ class SessionCache:
             )
         return lines
 
+    def _checkpoint_key(self, checkpoint_id: str) -> str:
+        return f"checkpoint:{checkpoint_id}"
+
+    def _session_checkpoint_key(self, session_id: str) -> str:
+        return f"session:{session_id}:pipeline_checkpoint"
+
+    def save_checkpoint(self, session_id: str, payload: Dict[str, object]) -> str:
+        """保存流水线断点；返回 checkpoint_id。"""
+        checkpoint_id = str(payload.get("checkpoint_id") or "")
+        if not checkpoint_id:
+            raise ValueError("checkpoint payload missing checkpoint_id")
+        serialized = json.dumps(payload, ensure_ascii=False)
+        pipe = self.client.pipeline()
+        pipe.set(self._checkpoint_key(checkpoint_id), serialized, ex=self.ttl_seconds)
+        pipe.set(self._session_checkpoint_key(session_id), checkpoint_id, ex=self.ttl_seconds)
+        pipe.execute()
+        return checkpoint_id
+
+    def get_checkpoint(self, checkpoint_id: str) -> Optional[Dict[str, object]]:
+        raw = self.client.get(self._checkpoint_key(checkpoint_id))
+        if not raw:
+            return None
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else None
+        except json.JSONDecodeError:
+            return None
+
+    def get_session_checkpoint_id(self, session_id: str) -> Optional[str]:
+        raw = self.client.get(self._session_checkpoint_key(session_id))
+        return str(raw) if raw else None
+
+    def delete_checkpoint(self, checkpoint_id: str, session_id: str | None = None) -> None:
+        pipe = self.client.pipeline()
+        pipe.delete(self._checkpoint_key(checkpoint_id))
+        if session_id:
+            pipe.delete(self._session_checkpoint_key(session_id))
+        pipe.execute()
+
     def close(self) -> None:
         try:
             self.client.close()

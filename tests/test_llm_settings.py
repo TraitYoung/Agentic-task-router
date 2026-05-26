@@ -25,17 +25,20 @@ def test_llm_api_key_falls_back_to_qwen(monkeypatch):
     assert Settings().llm_api_key == "legacy-only"
 
 
-def test_llm_defaults_to_kimi_moonshot(monkeypatch):
-    assert Settings().llm_base_url == "https://api.moonshot.cn/v1"
-    assert Settings().llm_model == "kimi-k2.6"
+def test_llm_defaults_to_deepseek(monkeypatch):
+    assert Settings().llm_base_url == "https://api.deepseek.com/v1"
+    assert Settings().llm_model == "deepseek-v4-pro"
     assert Settings().llm_request_timeout == 300
+    assert Settings().uses_json_prompt_structured() is False
+    assert Settings().reasoning_effort() == "max"
 
 
 def test_llm_step_model_uses_step_override(monkeypatch):
-    monkeypatch.setenv("LLM_MODEL", "kimi-k2.6")
-    monkeypatch.setenv("LLM_DISCOVERY_MODEL", "kimi-k2.5")
-    assert Settings().step_model("discovery") == "kimi-k2.5"
-    assert Settings().step_model("merge") == "kimi-k2.6"
+    monkeypatch.setenv("LLM_MODEL", "deepseek-v4-pro")
+    monkeypatch.setenv("LLM_DISCOVERY_MODEL", "deepseek-v4-pro")
+    monkeypatch.setenv("LLM_MERGE_MODEL", "deepseek-v4-flash")
+    assert Settings().step_model("discovery") == "deepseek-v4-pro"
+    assert Settings().step_model("merge") == "deepseek-v4-flash"
 
 
 def test_llm_max_tokens_per_step(monkeypatch):
@@ -60,14 +63,23 @@ def test_llm_thinking_disabled_via_env(monkeypatch):
     assert kwargs["extra_body"]["thinking"]["type"] == "disabled"
 
 
+def test_llm_thinking_enabled_max_effort(monkeypatch):
+    kwargs = Settings().model_kwargs()
+    assert kwargs["extra_body"]["thinking"]["type"] == "enabled"
+    assert kwargs["reasoning_effort"] == "max"
+    health = Settings().llm_env_health()
+    assert health["llm_thinking"] == "enabled"
+    assert health["llm_reasoning_effort"] == "max"
+
+
 def test_llm_thinking_default_empty_kwargs(monkeypatch):
-    assert Settings().thinking_mode() == "default"
-    assert Settings().model_kwargs() == {}
+    assert Settings().thinking_mode() == "enabled"
+    assert Settings().model_kwargs()["reasoning_effort"] == "max"
 
 
 def test_llm_env_health_fields(monkeypatch):
     monkeypatch.setenv("LLM_API_KEY", "sk-test")
     health = Settings().llm_env_health()
     assert health["has_llm_key"] is True
-    assert health["llm_provider"] == "moonshot"
-    assert health["llm_thinking"] == "default"
+    assert health["llm_provider"] == "deepseek"
+    assert health["llm_thinking"] == "enabled"

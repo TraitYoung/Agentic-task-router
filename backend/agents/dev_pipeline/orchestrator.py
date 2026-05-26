@@ -25,21 +25,42 @@ import asyncio
 import json
 import logging
 import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from typing import Any, NamedTuple
+from typing import Any, Literal, NamedTuple
 
 from config.context_budget import WORKFLOW_USER_TEXT_MAX_CHARS, clip_text
 from prompts.dev_pipeline_profiles import detect_dev_profile
 from schemas.artifact_pack import (
+    build_delivery_partial_md,
+    build_discovery_partial_md,
+    build_implementation_partial_md,
     build_review_artifact_md,
     build_review_chat_summary,
     build_spec_artifact_md,
     build_spec_chat_summary,
+    build_sprint_partial_md,
+    build_test_code_partial_md,
+)
+from schemas.workflows import (
+    DevCodeSketch,
+    DevOutline,
+    DevTaskSpec,
+    DevTestBundle,
+    DevTestsChangelog,
 )
 from services.pipeline_memory import save_artifact_md
 
 logger = logging.getLogger("specforge.orchestrator")
 
+from .step_directions import (
+    NEXT_STEP,
+    PAUSE_AFTER_STEPS,
+    ChoiceId,
+    get_choice_options,
+    resolve_direction_hints,
+)
 from .step_agents import (
     DELIVERY_CFG,
     DISCOVERY_CFG,
@@ -64,6 +85,500 @@ class PipelineResult(NamedTuple):
     artifact_filename: str
     artifact_path: str
     steps: list[dict[str, Any]]
+
+
+class PipelineCheckpointOutcome(NamedTuple):
+    status: Literal["paused", "complete"]
+    result: PipelineResult | None
+    checkpoint_id: str | None
+    waiting_after: str | None
+
+
+_PARTIAL_BUILDERS = {
+    "discovery": lambda r: build_discovery_partial_md(r["discovery"]),
+    "sprint": lambda r: build_sprint_partial_md(r["outline"]),
+    "implementation": lambda r: build_implementation_partial_md(r["sketch"]),
+    "delivery": lambda r: build_delivery_partial_md(r["delivery"]),
+    "test_code": lambda r: build_test_code_partial_md(r["test_bundle"]),
+}
+
+
+def _hydrate_results(results: dict[str, Any]) -> dict[str, Any]:
+    hydrated: dict[str, Any] = {}
+    if "discovery" in results:
+        hydrated["discovery"] = DevTaskSpec.model_validate(results["discovery"])
+    if "outline" in results:
+        hydrated["outline"] = DevOutline.model_validate(results["outline"])
+    if "sketch" in results:
+        hydrated["sketch"] = DevCodeSketch.model_validate(results["sketch"])
+    if "delivery" in results:
+        hydrated["delivery"] = DevTestsChangelog.model_validate(results["delivery"])
+    if "test_bundle" in results:
+        hydrated["test_bundle"] = DevTestBundle.model_validate(results["test_bundle"])
+    return hydrated
+
+
+def _serialize_results(hydrated: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key, val in hydrated.items():
+        if hasattr(val, "model_dump"):
+            out[key] = val.model_dump()
+        else:
+            out[key] = val
+    return out
+
+
+def _partial_md_for_step(completed_step: str, hydrated: dict[str, Any]) -> str:
+    builder = _PARTIAL_BUILDERS.get(completed_step)
+    if builder is None:
+        return ""
+    return builder(hydrated)
+
+
+def _emit_pause(
+    *,
+    event_queue: asyncio.Queue | None,
+    completed_step: str,
+    partial_md: str,
+    checkpoint_id: str,
+    summary: dict[str, Any] | None = None,
+) -> None:
+    _put(
+        event_queue,
+        {
+            "type": "partial",
+            "step": completed_step,
+            "markdown": partial_md,
+            "summary": summary or {},
+        },
+    )
+    _put(
+        event_queue,
+        {
+            "type": "choice",
+            "checkpoint_id": checkpoint_id,
+            "step": completed_step,
+            "options": get_choice_options(completed_step),
+        },
+    )
+    _put(event_queue, {"type": "paused"})
+
+
+def _run_single_pipeline_step(
+    step_name: str,
+    *,
+    llm,
+    hydrated: dict[str, Any],
+    profile: dict[str, Any],
+    retrieval_context: str,
+    direction_hints: list[str] | None,
+    event_queue: asyncio.Queue | None,
+) -> tuple[Any, dict[str, Any], float]:
+    """Run one pipeline step; return (result_obj, trace_summary, duration_ms)."""
+    profile_injection = profile["prompt_injection"]
+    profile_focus = "、".join(profile["output_focus"])
+    profile_name = profile["name"]
+
+    if step_name == "discovery":
+        _emit_status(event_queue, "discovery")
+        t0 = time.perf_counter()
+        spec = run_discovery_step(
+            llm=llm,
+            raw_text=hydrated["user_text"],
+            profile_injection=profile_injection,
+            retrieval_context=retrieval_context,
+        )
+        t_ms = (time.perf_counter() - t0) * 1000
+        trace = _trace_step(1, DISCOVERY_CFG.node, t_ms, {"profile": profile_name, "discovery": spec.model_dump()})
+        _emit_status(event_queue, "discovery_done")
+        return spec, trace, t_ms
+
+    spec = hydrated["discovery"]
+    outline = hydrated.get("outline")
+    sketch = hydrated.get("sketch")
+    delivery = hydrated.get("delivery")
+
+    if step_name == "sprint":
+        _emit_status(event_queue, "sprint")
+        t0 = time.perf_counter()
+        outline = run_sprint_step(
+            llm=llm,
+            discovery=spec,
+            profile_focus=profile_focus,
+            direction_hints=direction_hints,
+        )
+        t_ms = (time.perf_counter() - t0) * 1000
+        trace = _trace_step(2, SPRINT_CFG.node, t_ms, {"profile": profile_name, "sprint_design": outline.model_dump()})
+        _emit_status(event_queue, "sprint_done")
+        return outline, trace, t_ms
+
+    if step_name == "implementation":
+        _emit_status(event_queue, "implementation")
+        t0 = time.perf_counter()
+        sketch = run_implementation_step(
+            llm=llm,
+            discovery=spec,
+            sprint=outline,
+            profile_injection=profile_injection,
+            direction_hints=direction_hints,
+        )
+        t_ms = (time.perf_counter() - t0) * 1000
+        trace = _trace_step(
+            3,
+            IMPLEMENT_CFG.node,
+            t_ms,
+            {"profile": profile_name, "impl_then_delivery": True, "sketch": sketch.model_dump()},
+        )
+        _emit_status(event_queue, "implementation_done")
+        return sketch, trace, t_ms
+
+    if step_name == "delivery":
+        _emit_status(event_queue, "delivery")
+        t0 = time.perf_counter()
+        delivery = run_delivery_step(
+            llm=llm,
+            discovery=spec,
+            sprint=outline,
+            profile_focus=profile_focus,
+            direction_hints=direction_hints,
+        )
+        t_ms = (time.perf_counter() - t0) * 1000
+        trace = _trace_step(
+            4,
+            DELIVERY_CFG.node,
+            t_ms,
+            {"profile": profile_name, "impl_then_delivery": True, "delivery": _delivery_trace_summary(delivery)},
+        )
+        _emit_status(event_queue, "delivery_done")
+        return delivery, trace, t_ms
+
+    if step_name == "test_code":
+        _emit_status(event_queue, "test_code")
+        t0 = time.perf_counter()
+        stream_cb = None
+        if event_queue is not None:
+            stream_cb = lambda token: _put(
+                event_queue, {"type": "delta", "step": "test_code", "content": token}
+            )
+        test_bundle = run_test_code_step(
+            llm=llm,
+            discovery=spec,
+            sprint=outline,
+            sketch=sketch,
+            delivery=delivery,
+            profile_focus=profile_focus,
+            direction_hints=direction_hints,
+            stream_callback=stream_cb,
+        )
+        t_ms = (time.perf_counter() - t0) * 1000
+        trace = _trace_step(
+            5,
+            TEST_CODE_CFG.node,
+            t_ms,
+            {
+                "profile": profile_name,
+                "test_bundle": test_bundle.model_dump(),
+                "test_files_count": len(test_bundle.files),
+            },
+        )
+        _emit_status(event_queue, "test_code_done")
+        return test_bundle, trace, t_ms
+
+    if step_name == "merge":
+        _emit_status(event_queue, "merge")
+        t0 = time.perf_counter()
+        stream_cb = None
+        if event_queue is not None:
+            stream_cb = lambda token: _put(
+                event_queue, {"type": "delta", "step": "merge", "content": token}
+            )
+        merged_notes = run_merge_step(
+            llm=llm,
+            discovery=spec,
+            sprint=outline,
+            sketch=sketch,
+            delivery=delivery,
+            stream_callback=stream_cb,
+            direction_hints=direction_hints,
+        )
+        t_ms = (time.perf_counter() - t0) * 1000
+        trace = _trace_step(6, MERGE_CFG.node, t_ms, {"profile": profile_name, "merge_preview": merged_notes[:300]})
+        return merged_notes, trace, t_ms
+
+    raise ValueError(f"unknown pipeline step: {step_name}")
+
+
+def _run_implementation_delivery_parallel(
+    *,
+    llm,
+    hydrated: dict[str, Any],
+    profile: dict[str, Any],
+    retrieval_context: str,
+    direction_hints: list[str] | None,
+    event_queue: asyncio.Queue | None,
+) -> tuple[DevCodeSketch, DevTestsChangelog, list[dict[str, Any]]]:
+    results: dict[str, Any] = {}
+    traces: list[dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        future_to_step = {
+            executor.submit(
+                _run_single_pipeline_step,
+                step_name,
+                llm=llm,
+                hydrated=hydrated,
+                profile=profile,
+                retrieval_context=retrieval_context,
+                direction_hints=direction_hints,
+                event_queue=event_queue,
+            ): step_name
+            for step_name in ("implementation", "delivery")
+        }
+        for future in as_completed(future_to_step):
+            step_name = future_to_step[future]
+            result_obj, trace, _ = future.result()
+            results[step_name] = result_obj
+            traces.append(trace)
+
+    traces.sort(key=lambda item: int(item.get("index", 0)))
+    return results["implementation"], results["delivery"], traces
+
+
+def _result_key_for_step(step_name: str) -> str:
+    return {
+        "discovery": "discovery",
+        "sprint": "outline",
+        "implementation": "sketch",
+        "delivery": "delivery",
+        "test_code": "test_bundle",
+    }[step_name]
+
+
+def _build_checkpoint_payload(
+    *,
+    session_id: str,
+    user_text: str,
+    profile: dict[str, Any],
+    retrieval_context: str,
+    waiting_after: str,
+    choices: dict[str, str],
+    hydrated: dict[str, Any],
+    trace_steps: list[dict[str, Any]],
+) -> dict[str, Any]:
+    checkpoint_id = str(uuid.uuid4())
+    results = _serialize_results({k: v for k, v in hydrated.items() if k != "user_text"})
+    return {
+        "checkpoint_id": checkpoint_id,
+        "session_id": session_id,
+        "user_text": user_text,
+        "profile": profile,
+        "retrieval_context": retrieval_context,
+        "waiting_after": waiting_after,
+        "choices": choices,
+        "results": results,
+        "trace_steps": trace_steps,
+    }
+
+
+def _save_checkpoint_safe(session_cache: Any, session_id: str, payload: dict[str, Any]) -> None:
+    try:
+        session_cache.save_checkpoint(session_id, payload)
+    except Exception as exc:
+        raise RuntimeError(f"checkpoint save failed (is Redis running?): {exc}") from exc
+
+
+def run_dev_pipeline_interactive_start(
+    user_text: str,
+    llm,
+    *,
+    retrieval_context: str = "",
+    event_queue: asyncio.Queue | None = None,
+    session_id: str,
+    session_cache: Any,
+) -> PipelineCheckpointOutcome:
+    clipped = clip_text(user_text.strip(), WORKFLOW_USER_TEXT_MAX_CHARS)
+    profile = detect_dev_profile(clipped)
+    _emit_status(event_queue, "profile", profile_name=profile["name"])
+
+    hydrated: dict[str, Any] = {"user_text": clipped}
+    trace_steps: list[dict[str, Any]] = []
+
+    spec, trace, _ = _run_single_pipeline_step(
+        "discovery",
+        llm=llm,
+        hydrated=hydrated,
+        profile=profile,
+        retrieval_context=retrieval_context,
+        direction_hints=None,
+        event_queue=event_queue,
+    )
+    hydrated["discovery"] = spec
+    trace_steps.append(trace)
+
+    payload = _build_checkpoint_payload(
+        session_id=session_id,
+        user_text=clipped,
+        profile=profile,
+        retrieval_context=retrieval_context,
+        waiting_after="discovery",
+        choices={},
+        hydrated=hydrated,
+        trace_steps=trace_steps,
+    )
+    _save_checkpoint_safe(session_cache, session_id, payload)
+    partial_md = _partial_md_for_step("discovery", hydrated)
+    _emit_pause(
+        event_queue=event_queue,
+        completed_step="discovery",
+        partial_md=partial_md,
+        checkpoint_id=payload["checkpoint_id"],
+        summary=spec.model_dump(),
+    )
+    return PipelineCheckpointOutcome("paused", None, payload["checkpoint_id"], "discovery")
+
+
+def run_dev_pipeline_interactive_continue(
+    checkpoint_id: str,
+    choice: ChoiceId,
+    llm,
+    *,
+    event_queue: asyncio.Queue | None = None,
+    session_id: str,
+    session_cache: Any,
+) -> PipelineCheckpointOutcome:
+    payload = session_cache.get_checkpoint(checkpoint_id)
+    if not payload:
+        raise ValueError("checkpoint not found or expired")
+    if str(payload.get("session_id")) != session_id:
+        raise ValueError("checkpoint session mismatch")
+
+    waiting_after = str(payload["waiting_after"])
+    if waiting_after not in PAUSE_AFTER_STEPS:
+        raise ValueError(f"invalid waiting_after: {waiting_after}")
+
+    choices = dict(payload.get("choices") or {})
+    choices[waiting_after] = choice
+
+    user_text = str(payload["user_text"])
+    profile = dict(payload["profile"])
+    retrieval_context = str(payload.get("retrieval_context") or "")
+    trace_steps: list[dict[str, Any]] = list(payload.get("trace_steps") or [])
+
+    hydrated = _hydrate_results(dict(payload.get("results") or {}))
+    hydrated["user_text"] = user_text
+
+    next_step = NEXT_STEP[waiting_after]
+    direction_hints = resolve_direction_hints(waiting_after, choice)
+
+    _put(
+        event_queue,
+        {
+            "type": "ack",
+            "action": "continue",
+            "choice": choice,
+            "next_step": next_step,
+            "step": waiting_after,
+        },
+    )
+
+    if waiting_after == "sprint":
+        sketch, delivery, parallel_traces = _run_implementation_delivery_parallel(
+            llm=llm,
+            hydrated=hydrated,
+            profile=profile,
+            retrieval_context=retrieval_context,
+            direction_hints=direction_hints,
+            event_queue=event_queue,
+        )
+        hydrated["sketch"] = sketch
+        hydrated["delivery"] = delivery
+        trace_steps.extend(parallel_traces)
+
+        old_checkpoint_id = checkpoint_id
+        new_payload = _build_checkpoint_payload(
+            session_id=session_id,
+            user_text=user_text,
+            profile=profile,
+            retrieval_context=retrieval_context,
+            waiting_after="delivery",
+            choices=choices,
+            hydrated=hydrated,
+            trace_steps=trace_steps,
+        )
+        session_cache.delete_checkpoint(old_checkpoint_id, session_id)
+        _save_checkpoint_safe(session_cache, session_id, new_payload)
+
+        _put(
+            event_queue,
+            {
+                "type": "partial",
+                "step": "implementation",
+                "markdown": _partial_md_for_step("implementation", hydrated),
+                "summary": sketch.model_dump(),
+            },
+        )
+        _emit_pause(
+            event_queue=event_queue,
+            completed_step="delivery",
+            partial_md=_partial_md_for_step("delivery", hydrated),
+            checkpoint_id=new_payload["checkpoint_id"],
+            summary=delivery.model_dump(),
+        )
+        return PipelineCheckpointOutcome("paused", None, new_payload["checkpoint_id"], "delivery")
+
+    result_obj, trace, _ = _run_single_pipeline_step(
+        next_step,
+        llm=llm,
+        hydrated=hydrated,
+        profile=profile,
+        retrieval_context=retrieval_context,
+        direction_hints=direction_hints,
+        event_queue=event_queue,
+    )
+    trace_steps.append(trace)
+
+    if next_step == "merge":
+        session_cache.delete_checkpoint(checkpoint_id, session_id)
+        merged_notes = str(result_obj)
+        pipeline_result = _finish_spec(
+            user_text=user_text,
+            spec=hydrated["discovery"],
+            outline=hydrated["outline"],
+            sketch=hydrated["sketch"],
+            delivery=hydrated["delivery"],
+            test_bundle=hydrated["test_bundle"],
+            merged_notes=merged_notes,
+            profile=profile,
+            steps=trace_steps,
+        )
+        return PipelineCheckpointOutcome("complete", pipeline_result, None, None)
+
+    result_key = _result_key_for_step(next_step)
+    hydrated[result_key] = result_obj
+
+    old_checkpoint_id = checkpoint_id
+    new_payload = _build_checkpoint_payload(
+        session_id=session_id,
+        user_text=user_text,
+        profile=profile,
+        retrieval_context=retrieval_context,
+        waiting_after=next_step,
+        choices=choices,
+        hydrated=hydrated,
+        trace_steps=trace_steps,
+    )
+    session_cache.delete_checkpoint(old_checkpoint_id, session_id)
+    _save_checkpoint_safe(session_cache, session_id, new_payload)
+
+    partial_md = _partial_md_for_step(next_step, hydrated)
+    summary = result_obj.model_dump() if hasattr(result_obj, "model_dump") else {"merge_preview": str(result_obj)[:300]}
+    _emit_pause(
+        event_queue=event_queue,
+        completed_step=next_step,
+        partial_md=partial_md,
+        checkpoint_id=new_payload["checkpoint_id"],
+        summary=summary,
+    )
+    return PipelineCheckpointOutcome("paused", None, new_payload["checkpoint_id"], next_step)
 
 
 def _now_iso() -> str:
@@ -233,47 +748,24 @@ def _run_dev_pipeline_core(
     steps.append(_trace_step(2, SPRINT_CFG.node, t2, {"profile": profile["name"], "sprint_design": outline.model_dump()}))
     _emit_status(event_queue, "sprint_done")
 
-    _emit_status(event_queue, "implementation")
-    t0 = time.perf_counter()
-    sketch = run_implementation_step(
+    hydrated = {"user_text": clipped, "discovery": spec, "outline": outline}
+    sketch, delivery, parallel_traces = _run_implementation_delivery_parallel(
         llm=llm,
-        discovery=spec,
-        sprint=outline,
-        profile_injection=profile_injection,
+        hydrated=hydrated,
+        profile=profile,
+        retrieval_context=retrieval_context,
+        direction_hints=None,
+        event_queue=event_queue,
     )
-    t_impl = (time.perf_counter() - t0) * 1000
-    steps.append(
-        _trace_step(
-            3,
-            IMPLEMENT_CFG.node,
-            t_impl,
-            {"profile": profile["name"], "impl_then_delivery": True, "sketch": sketch.model_dump()},
-        )
-    )
-    _emit_status(event_queue, "implementation_done")
-
-    _emit_status(event_queue, "delivery")
-    t0 = time.perf_counter()
-    delivery = run_delivery_step(
-        llm=llm,
-        discovery=spec,
-        sprint=outline,
-        sketch=sketch,
-        profile_focus=profile_focus,
-    )
-    t_del = (time.perf_counter() - t0) * 1000
-    steps.append(
-        _trace_step(
-            4,
-            DELIVERY_CFG.node,
-            t_del,
-            {"profile": profile["name"], "impl_then_delivery": True, "delivery": _delivery_trace_summary(delivery)},
-        )
-    )
-    _emit_status(event_queue, "delivery_done")
+    steps.extend(parallel_traces)
 
     _emit_status(event_queue, "test_code")
     t0 = time.perf_counter()
+    stream_cb = None
+    if event_queue is not None:
+        stream_cb = lambda token: _put(
+            event_queue, {"type": "delta", "step": "test_code", "content": token}
+        )
     test_bundle = run_test_code_step(
         llm=llm,
         discovery=spec,
@@ -281,6 +773,7 @@ def _run_dev_pipeline_core(
         sketch=sketch,
         delivery=delivery,
         profile_focus=profile_focus,
+        stream_callback=stream_cb,
     )
     t_test = (time.perf_counter() - t0) * 1000
     steps.append(
@@ -299,12 +792,18 @@ def _run_dev_pipeline_core(
 
     _emit_status(event_queue, "merge")
     t0 = time.perf_counter()
+    merge_stream_cb = None
+    if event_queue is not None:
+        merge_stream_cb = lambda token: _put(
+            event_queue, {"type": "delta", "step": "merge", "content": token}
+        )
     merged_notes = run_merge_step(
         llm=llm,
         discovery=spec,
         sprint=outline,
         sketch=sketch,
         delivery=delivery,
+        stream_callback=merge_stream_cb,
     )
     t4 = (time.perf_counter() - t0) * 1000
     steps.append(_trace_step(6, MERGE_CFG.node, t4, {"profile": profile["name"], "merge_preview": merged_notes[:300]}))
@@ -379,6 +878,40 @@ def run_dev_pipeline_stream(
         llm,
         retrieval_context=retrieval_context,
         event_queue=event_queue,
+    )
+
+
+def run_dev_pipeline_interactive_stream(
+    user_text: str,
+    llm,
+    *,
+    retrieval_context: str = "",
+    event_queue: asyncio.Queue | None = None,
+    session_id: str,
+    session_cache: Any,
+    action: Literal["start", "continue"] = "start",
+    checkpoint_id: str | None = None,
+    choice: ChoiceId | None = None,
+) -> PipelineCheckpointOutcome:
+    """Interactive forward workflow: one step per invocation with pause/choice."""
+    if action == "continue":
+        if not checkpoint_id or not choice:
+            raise ValueError("continue requires checkpoint_id and choice")
+        return run_dev_pipeline_interactive_continue(
+            checkpoint_id,
+            choice,
+            llm,
+            event_queue=event_queue,
+            session_id=session_id,
+            session_cache=session_cache,
+        )
+    return run_dev_pipeline_interactive_start(
+        user_text,
+        llm,
+        retrieval_context=retrieval_context,
+        event_queue=event_queue,
+        session_id=session_id,
+        session_cache=session_cache,
     )
 
 

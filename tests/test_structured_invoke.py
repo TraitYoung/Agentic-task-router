@@ -25,6 +25,11 @@ def _clear_env(monkeypatch):
             monkeypatch.delenv(key, raising=False)
 
 
+def test_uses_native_for_deepseek_base(monkeypatch):
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.deepseek.com/v1")
+    assert uses_json_prompt_structured() is False
+
+
 def test_uses_json_prompt_for_moonshot_base(monkeypatch):
     monkeypatch.setenv("LLM_BASE_URL", "https://api.moonshot.cn/v1")
     assert uses_json_prompt_structured() is True

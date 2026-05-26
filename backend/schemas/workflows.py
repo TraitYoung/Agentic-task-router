@@ -9,6 +9,18 @@ from schemas.coerce import cap_str, normalize_str_list
 _WORKFLOW_MODEL_CONFIG = ConfigDict(extra="ignore")
 
 
+ENGINEERING_HANDOFF_CONTRACT = """## Agent Handoff Contract
+Use this section as the durable engineering guardrail when continuing work in Cursor, Copilot, Claude, or another coding agent.
+
+- Do not start coding until you restate the target slice, touched files, data flow, and acceptance checks.
+- Preserve module boundaries from the architecture; do not bypass data, state, API, or persistence layers for speed.
+- Keep changes small and traceable to the ordered backlog; call out any product assumption before implementing ambiguous behavior.
+- For every user-facing path, handle loading, empty, error, validation, and permission states where applicable.
+- Update or add tests for changed behavior, then run the narrowest meaningful checks. If a check cannot run, state the reason and residual risk.
+- At completion, report changed files, contracts affected, tests run, and any follow-up work.
+""".strip()
+
+
 class DevTaskSpec(BaseModel):
     """步骤 1：需求发现 — 对齐用户价值与可验收标准（教材式需求 + 敏捷用户故事）"""
 
@@ -17,10 +29,10 @@ class DevTaskSpec(BaseModel):
     goal: str = Field(..., max_length=2000)
     constraints: List[str] = Field(default_factory=list, max_length=8)
     stack_hint: str = Field(default="", max_length=500)
-    acceptance_criteria: List[str] = Field(default_factory=list, max_length=6)
+    acceptance_criteria: List[str] = Field(default_factory=list, max_length=8)
     user_stories: List[str] = Field(
         default_factory=list,
-        max_length=6,
+        max_length=8,
         description="简短用户故事，建议 As a / I want / so that 或一句话等价物",
     )
     mvp_sprint_goal: str = Field(
@@ -52,12 +64,12 @@ class DevTaskSpec(BaseModel):
     @field_validator("acceptance_criteria", mode="before")
     @classmethod
     def cap_acceptance(cls, v: object) -> object:
-        return normalize_str_list(v, limit=6, item_max=400)
+        return normalize_str_list(v, limit=8, item_max=400)
 
     @field_validator("user_stories", mode="before")
     @classmethod
     def cap_user_stories(cls, v: object) -> object:
-        return normalize_str_list(v, limit=6, item_max=500)
+        return normalize_str_list(v, limit=8, item_max=500)
 
     @field_validator("measurable_outcomes", mode="before")
     @classmethod
@@ -75,7 +87,7 @@ class DevOutline(BaseModel):
     risks: List[str] = Field(default_factory=list, max_length=6)
     backlog_mvp_ordered: List[str] = Field(
         default_factory=list,
-        max_length=10,
+        max_length=12,
         description="本 Sprint 内按实现顺序排列的待办项（颗粒度到可开发任务）",
     )
     backlog_parking_lot: List[str] = Field(
@@ -117,7 +129,7 @@ class DevOutline(BaseModel):
     @field_validator("backlog_mvp_ordered", mode="before")
     @classmethod
     def cap_mvp_backlog(cls, v: object) -> object:
-        return normalize_str_list(v, limit=10, item_max=400)
+        return normalize_str_list(v, limit=12, item_max=400)
 
 
 class DevCodeSketch(BaseModel):
@@ -200,7 +212,7 @@ class DevTestFile(BaseModel):
     model_config = _WORKFLOW_MODEL_CONFIG
 
     path: str = Field(default="", max_length=200)
-    code: str = Field(default="", max_length=8000)
+    code: str = Field(default="", max_length=3000)
 
     @field_validator("path", mode="before")
     @classmethod
@@ -210,15 +222,15 @@ class DevTestFile(BaseModel):
     @field_validator("code", mode="before")
     @classmethod
     def cap_code(cls, v: object) -> object:
-        return cap_str(v, 8000)
+        return cap_str(v, 3000)
 
 
 class DevTestBundle(BaseModel):
-    """步骤 5：可运行的测试代码草稿（2~3 个文件）。"""
+    """步骤 5：可运行的测试代码草稿（1~2 个文件）。"""
 
     model_config = _WORKFLOW_MODEL_CONFIG
 
-    files: List[DevTestFile] = Field(default_factory=list, max_length=5)
+    files: List[DevTestFile] = Field(default_factory=list, max_length=2)
 
     @field_validator("files", mode="before")
     @classmethod
@@ -226,7 +238,7 @@ class DevTestBundle(BaseModel):
         if not isinstance(v, list):
             return []
         out: list[DevTestFile] = []
-        for item in v[:5]:
+        for item in v[:2]:
             if isinstance(item, DevTestFile):
                 out.append(item)
             elif isinstance(item, dict):
@@ -280,6 +292,7 @@ def to_implementation_prompt(spec: DevTaskSpec, outline: DevOutline) -> str:
     backlog = "\n".join(f"{i+1}. {t}" for i, t in enumerate(outline.backlog_mvp_ordered))
     acceptance = "\n".join(f"- [ ] {ac}" for ac in spec.acceptance_criteria)
     return (
+        f"{ENGINEERING_HANDOFF_CONTRACT}\n\n"
         f"## 任务目标\n{spec.goal}\n\n"
         f"## 用户故事\n{stories}\n\n"
         f"## 实现任务（按顺序）\n{backlog}\n\n"
@@ -296,6 +309,7 @@ def to_test_prompt(delivery: DevTestsChangelog) -> str:
     dod = "\n".join(f"- [ ] {d}" for d in delivery.definition_of_done)
     ci = "\n".join(f"- {c}" for c in delivery.ci_cd_notes)
     return (
+        f"{ENGINEERING_HANDOFF_CONTRACT}\n\n"
         f"## 测试用例\n{tests}\n\n"
         f"## 完成定义 (DoD)\n{dod}\n\n"
         f"## CI/CD 注意事项\n{ci}\n\n"

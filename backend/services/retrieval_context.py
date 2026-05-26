@@ -18,6 +18,8 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
+from services.project_knowledge import ensure_project_knowledge_indexed
+
 Mode = Literal["spec", "review"]
 
 
@@ -67,11 +69,13 @@ def _knowledge_context(store: Any, text: str) -> str:
     parts: list[str] = []
     for doc in docs:
         snippet = doc["content"][:300]
-        parts.append(f"- [{doc['title']}] {snippet}")
-    return "相关知识文档:\n" + "\n".join(parts)
+        source = doc.get("source") or "knowledge"
+        parts.append(f"- [{doc['title']}] source={source}\n  {snippet}")
+    return "相关知识文档（README/docs/API/codebase/history index）:\n" + "\n".join(parts)
 
 
 def build_retrieval_context(store: Any, *, mode: Mode, text: str) -> str:
+    ensure_project_knowledge_indexed(store)
     parts: list[str] = []
     if mode == "review":
         ctx = _review_context(store)
@@ -83,4 +87,3 @@ def build_retrieval_context(store: Any, *, mode: Mode, text: str) -> str:
     if kn_ctx:
         parts.append(kn_ctx)
     return "\n\n".join(parts)
-

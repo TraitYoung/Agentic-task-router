@@ -18,4 +18,4 @@ def test_dev_test_bundle_accepts_files():
 def test_dev_test_bundle_caps_file_count():
     raw = {"files": [{"path": f"t{i}.py", "code": "pass"} for i in range(8)]}
     bundle = DevTestBundle.model_validate(raw)
-    assert len(bundle.files) <= 5
+    assert len(bundle.files) <= 2

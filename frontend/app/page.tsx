@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { canSendMessage, shouldSendOnEnter } from "./chatComposer";
-import type { TraceStepRow, Message, UiMode } from "./types";
+import type { TraceStepRow, Message, UiMode, ChoiceId, StageChoice, StagePartial } from "./types";
 import { parseSseEvent } from "./lib";
 import { AssistantBubble, UserBubble } from "./Bubble";
 import { Composer } from "./Composer";
@@ -11,6 +11,7 @@ import { PipelineProgress } from "./PipelineProgress";
 import {
   normalizePipelineStep,
   pipelineStepLabel,
+  getNextStepAfter,
   type PipelineStepId,
 } from "./pipelineSteps";
 import { WelcomeHero } from "./WelcomeHero";
@@ -51,6 +52,9 @@ export default function Home() {
   const [elapsed, setElapsed] = useState(0);
   const [pipelineStep, setPipelineStep] = useState<PipelineStepId | null>(null);
   const [backendModel, setBackendModel] = useState<string | null>(null);
+  const [continuingChoice, setContinuingChoice] = useState(false);
+  const [choiceLoadingId, setChoiceLoadingId] = useState<string | null>(null);
+  const [streamStatusText, setStreamStatusText] = useState("");
   const [apiKey, setApiKey] = useState<string>(() => {
     try { return window.localStorage.getItem("x-api-key") || ""; } catch { return ""; }
   });
@@ -70,10 +74,13 @@ export default function Home() {
   }
 
   useEffect(() => {
-    if (!loading) { setElapsed(0); return; }
+    if (!loading && !continuingChoice) {
+      setElapsed(0);
+      return;
+    }
     const id = setInterval(() => setElapsed((n) => n + 1), 1000);
     return () => clearInterval(id);
-  }, [loading]);
+  }, [loading, continuingChoice]);
 
   useEffect(() => {
     void (async () => {
@@ -152,9 +159,303 @@ export default function Home() {
     if (!loading) textareaRef.current?.focus();
   }, [loading, mode]);
 
+  function formatNetworkError(rawMsg: string): string {
+    const isNetworkDrop =
+      /failed to fetch|network error|networkerror|load failed|连接/i.test(rawMsg);
+    if (isNetworkDrop) {
+      return `连接中断：模型单步常需 1~3 分钟，请确认后端仍在运行（start_dev.bat）后重试；分阶段选择后请勿刷新页面。\n\n原始错误：${rawMsg}`;
+    }
+    if (rawMsg.includes("无法连接") || rawMsg.includes("503")) {
+      return `请求失败：后端服务不可用。请双击项目根目录的 start_dev.bat 启动全部服务。\n\n原始错误：${rawMsg}`;
+    }
+    return `请求失败：${rawMsg}`;
+  }
+
+  function markChoiceRetry(assistantMsgId: string, checkpointId: string, choice: ChoiceId) {
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.id !== assistantMsgId) return m;
+        const stageChoices = (m.stageChoices ?? []).map((c) =>
+          c.checkpointId === checkpointId
+            ? { ...c, retryable: true, lastChoice: choice, selected: choice }
+            : c
+        );
+        return { ...m, stageChoices, streamStatusText: undefined, awaitingChoice: false };
+      })
+    );
+  }
+
+  async function consumeChatStream(
+    assistantMsgId: string,
+    body: Record<string, unknown>,
+    controller: AbortController
+  ): Promise<{ paused: boolean }> {
+    const outboundTraceId = crypto.randomUUID?.() ?? "";
+    const res = await fetch("/api/chat/stream", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-session-id": sessionId,
+        ...(apiKey ? { "x-api-key": apiKey } : {}),
+        ...(outboundTraceId ? { "x-trace-id": outboundTraceId } : {}),
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const ct = res.headers.get("content-type") ?? "";
+      if (ct.includes("application/json")) {
+        const j = (await res.json().catch(() => null)) as { detail?: string } | null;
+        throw new Error(j?.detail ?? `HTTP ${res.status}`);
+      }
+      throw new Error(`HTTP ${res.status}`);
+    }
+    if (!res.body) throw new Error("响应无正文");
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buf = "";
+    let collectedTraceId = "";
+    let collectedTrace: TraceStepRow[] = [];
+    let paused = false;
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const parts = buf.split("\n\n");
+      buf = parts.pop() ?? "";
+      for (const part of parts) {
+        const msg = parseSseEvent(part);
+        if (!msg) continue;
+
+        if (msg.type === "meta") {
+          if (msg.trace_id) collectedTraceId = String(msg.trace_id);
+          if (msg.trace && Array.isArray(msg.trace))
+            collectedTrace = msg.trace as TraceStepRow[];
+          continue;
+        }
+        if (msg.type === "done") continue;
+
+        if (msg.type === "done") continue;
+
+        if (msg.type === "ack") {
+          const nextStep = normalizePipelineStep(String(msg.next_step ?? ""));
+          if (nextStep) setPipelineStep(nextStep);
+          const ackText = `> 已收到选择，开始${nextStep ? pipelineStepLabel(nextStep, mode) : "下一步"}…`;
+          setStreamStatusText(ackText);
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsgId
+                ? {
+                    ...m,
+                    streamStatusText: ackText,
+                    activePartialStep: nextStep ?? m.activePartialStep,
+                  }
+                : m
+            )
+          );
+          continue;
+        }
+
+        if (msg.type === "heartbeat") {
+          const hint = String(msg.text ?? "模型仍在思考，请稍候…");
+          const stepPart = msg.step ? pipelineStepLabel(normalizePipelineStep(String(msg.step)), mode) : "";
+          const line = stepPart ? `> ${stepPart} · ${hint}` : `> ${hint}`;
+          setStreamStatusText(line);
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsgId ? { ...m, streamStatusText: line } : m
+            )
+          );
+          continue;
+        }
+
+        if (msg.type === "delta") {
+          const token = String(msg.content ?? "");
+          const deltaStep = String(msg.step ?? "merge");
+          if (token) {
+            if (deltaStep === "test_code") {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantMsgId
+                    ? {
+                        ...m,
+                        testCodeStream: (m.testCodeStream || "") + token,
+                        awaitingChoice: false,
+                        activePartialStep: "test_code",
+                      }
+                    : m
+                )
+              );
+              setPipelineStep("test_code");
+            } else {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantMsgId
+                    ? {
+                        ...m,
+                        mergeStream: (m.mergeStream || "") + token,
+                        awaitingChoice: false,
+                        activePartialStep: "merge",
+                      }
+                    : m
+                )
+              );
+              setPipelineStep("merge");
+            }
+          }
+          continue;
+        }
+
+        if (msg.type === "partial") {
+          const step = String(msg.step ?? "");
+          const markdown = String(msg.markdown ?? "");
+          setMessages((prev) =>
+            prev.map((m) => {
+              if (m.id !== assistantMsgId) return m;
+              const existing = m.stagePartials ?? [];
+              const filtered = existing.filter((p) => p.step !== step);
+              const stagePartials: StagePartial[] = [...filtered, { step, markdown }];
+              return {
+                ...m,
+                stagePartials,
+                streamStatusText: undefined,
+                activePartialStep: undefined,
+                testCodeStream: step === "test_code" ? undefined : m.testCodeStream,
+                mergeStream: step === "merge" ? undefined : m.mergeStream,
+                awaitingChoice: false,
+              };
+            })
+          );
+          const normalized = normalizePipelineStep(step);
+          if (normalized) setPipelineStep(`${normalized}_done` as PipelineStepId);
+          continue;
+        }
+
+        if (msg.type === "choice") {
+          const checkpointId = String(msg.checkpoint_id ?? "");
+          const step = String(msg.step ?? "");
+          const options = (msg.options as StageChoice["options"]) ?? [];
+          setMessages((prev) =>
+            prev.map((m) => {
+              if (m.id !== assistantMsgId) return m;
+              const stageChoices = [...(m.stageChoices ?? []), { checkpointId, step, options }];
+              return {
+                ...m,
+                stageChoices,
+                awaitingChoice: true,
+                streamStatusText: undefined,
+                activePartialStep: undefined,
+              };
+            })
+          );
+          continue;
+        }
+
+        if (msg.type === "paused") {
+          paused = true;
+          setLoading(false);
+          setContinuingChoice(false);
+          setChoiceLoadingId(null);
+          setStreamingId(null);
+          setStreamStatusText("");
+          continue;
+        }
+
+        if (msg.type === "status") {
+          const step = normalizePipelineStep(String(msg.step ?? ""));
+          if (step) setPipelineStep(step);
+          const statusLine = `> ${msg.text as string}`;
+          setStreamStatusText(statusLine);
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsgId
+                ? {
+                    ...m,
+                    streamStatusText: statusLine,
+                    activePartialStep: step?.replace(/_done$/, "") ?? m.activePartialStep,
+                  }
+                : m
+            )
+          );
+          continue;
+        }
+        if (msg.type === "artifact") {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsgId
+                ? {
+                    ...m,
+                    artifactMd: String(msg.content ?? ""),
+                    artifactPath: String(msg.file_path ?? ""),
+                    artifactFilename: String(msg.filename ?? "SPEC.md"),
+                    awaitingChoice: false,
+                  }
+                : m
+            )
+          );
+        }
+        if (msg.type === "reply") {
+          const full = String(msg.content ?? "");
+          setStreamStatusText("");
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsgId
+                ? { ...m, content: full, streamStatusText: undefined, awaitingChoice: false }
+                : m
+            )
+          );
+        }
+        if (msg.type === "error") {
+          const detail = typeof msg.detail === "string" ? msg.detail : "后端生成失败";
+          const step = typeof msg.step === "string" && msg.step ? msg.step : "";
+          const label = step ? `步骤「${step}」失败` : "后端生成失败";
+          setError(detail);
+          setStreamStatusText("");
+          setMessages((prev) =>
+            prev.map((m) => {
+              if (m.id !== assistantMsgId) return m;
+              const lastChoice = m.stageChoices?.filter((c) => c.selected).at(-1);
+              const stageChoices = (m.stageChoices ?? []).map((c) =>
+                c.checkpointId === lastChoice?.checkpointId
+                  ? { ...c, retryable: true, lastChoice: c.selected ?? c.lastChoice }
+                  : c
+              );
+              return {
+                ...m,
+                content: `${label}：${detail}`,
+                streamStatusText: undefined,
+                stageChoices,
+                awaitingChoice: false,
+              };
+            })
+          );
+        }
+      }
+    }
+
+    if (collectedTrace.length || collectedTraceId) {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantMsgId
+            ? {
+                ...m,
+                traceId: collectedTraceId || undefined,
+                traceSteps: collectedTrace.length ? collectedTrace : undefined,
+              }
+            : m
+        )
+      );
+    }
+
+    return { paused };
+  }
+
   async function onSend() {
     const trimmed = text.trim();
-    if (!trimmed || !sessionId || loading) return;
+    if (!trimmed || !sessionId || loading || continuingChoice) return;
 
     setLoading(true);
     setError("");
@@ -168,135 +469,113 @@ export default function Home() {
     setMessages((prev) => [
       ...prev,
       { id: userMsgId, role: "user", content: trimmed, ts: now },
-      { id: assistantMsgId, role: "assistant", content: "", ts: now },
+      {
+        id: assistantMsgId,
+        role: "assistant",
+        content: "",
+        ts: now,
+        sourceUserText: trimmed,
+      },
     ]);
     setStreamingId(assistantMsgId);
 
     const controller = new AbortController();
     abortRef.current = controller;
 
+    let streamPaused = false;
     try {
-      const outboundTraceId = crypto.randomUUID?.() ?? "";
-      const res = await fetch("/api/chat/stream", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-session-id": sessionId,
-          ...(apiKey ? { "x-api-key": apiKey } : {}),
-          ...(outboundTraceId ? { "x-trace-id": outboundTraceId } : {}),
-        },
-        body: JSON.stringify({ text: trimmed.slice(0, 12000), mode }),
-        signal: controller.signal,
-      });
-
-      if (!res.ok) {
-        const ct = res.headers.get("content-type") ?? "";
-        if (ct.includes("application/json")) {
-          const j = (await res.json().catch(() => null)) as { detail?: string } | null;
-          throw new Error(j?.detail ?? `HTTP ${res.status}`);
-        }
-        throw new Error(`HTTP ${res.status}`);
-      }
-      if (!res.body) throw new Error("响应无正文");
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder("utf-8");
-      let buf = "";
-      let collectedTraceId = "";
-      let collectedTrace: TraceStepRow[] = [];
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const parts = buf.split("\n\n");
-        buf = parts.pop() ?? "";
-        for (const part of parts) {
-          const msg = parseSseEvent(part);
-          if (!msg) continue;
-
-          if (msg.type === "meta") {
-            if (msg.trace_id) collectedTraceId = String(msg.trace_id);
-            if (msg.trace && Array.isArray(msg.trace))
-              collectedTrace = msg.trace as TraceStepRow[];
-            continue;
-          }
-          if (msg.type === "done") {
-            continue;
-          }
-          if (msg.type === "delta") {
-            continue;
-          }
-          if (msg.type === "status") {
-            const step = normalizePipelineStep(String(msg.step ?? ""));
-            if (step) setPipelineStep(step);
-            const statusLine = `> ${msg.text as string}`;
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantMsgId ? { ...m, content: statusLine } : m
-              )
-            );
-          }
-          if (msg.type === "artifact") {
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantMsgId
-                  ? {
-                      ...m,
-                      artifactMd: String(msg.content ?? ""),
-                      artifactPath: String(msg.file_path ?? ""),
-                      artifactFilename: String(msg.filename ?? "SPEC.md"),
-                    }
-                  : m
-              )
-            );
-          }
-          if (msg.type === "reply") {
-            const full = String(msg.content ?? "");
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantMsgId ? { ...m, content: full } : m
-              )
-            );
-          }
-          if (msg.type === "error") {
-            const detail = typeof msg.detail === "string" ? msg.detail : "后端生成失败";
-            const step = typeof msg.step === "string" && msg.step ? msg.step : "";
-            const label = step ? `步骤「${step}」失败` : "后端生成失败";
-            setError(detail);
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantMsgId
-                  ? { ...m, content: `${label}：${detail}` }
-                  : m
-              )
-            );
-          }
-        }
-      }
-
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantMsgId
-            ? { ...m, traceId: collectedTraceId || undefined, traceSteps: collectedTrace.length ? collectedTrace : undefined }
-            : m
-        )
+      const { paused } = await consumeChatStream(
+        assistantMsgId,
+        { text: trimmed.slice(0, 12000), mode, action: "start" },
+        controller
       );
+      streamPaused = paused;
+      if (paused) return;
     } catch (e: unknown) {
       if (e instanceof DOMException && e.name === "AbortError") {
         setMessages((prev) =>
           prev.map((m) =>
-            m.id === assistantMsgId && !m.content
+            m.id === assistantMsgId && !m.content && !m.stagePartials?.length
               ? { ...m, content: "（已停止生成）" }
               : m
           )
         );
       } else {
         const rawMsg = e instanceof Error ? e.message : "请求失败";
-        const hint = rawMsg.includes("无法连接") || rawMsg.includes("fetch") || rawMsg.includes("503")
-          ? `请求失败：后端服务不可用。请双击项目根目录的 start_dev.bat 启动全部服务。\n\n原始错误：${rawMsg}`
-          : `请求失败：${rawMsg}`;
+        const hint = formatNetworkError(rawMsg);
         setError(hint);
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantMsgId ? { ...m, content: `❌ ${hint}`, streamStatusText: undefined } : m
+          )
+        );
+      }
+    } finally {
+      setStreamingId(null);
+      setLoading(false);
+      setStreamStatusText("");
+      if (!streamPaused && !abortRef.current?.signal.aborted) setPipelineStep(null);
+      abortRef.current = null;
+    }
+  }
+
+  async function runContinue(
+    assistantMsgId: string,
+    sourceUserText: string,
+    checkpointId: string,
+    choiceId: ChoiceId,
+    completedStep: string
+  ) {
+    const next = getNextStepAfter(completedStep);
+    if (next) setPipelineStep(next);
+
+    setContinuingChoice(true);
+    setLoading(true);
+    setChoiceLoadingId(checkpointId);
+    setError("");
+    setStreamingId(assistantMsgId);
+    setStreamStatusText(`> 已选择 ${choiceId}，继续生成…`);
+
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.id !== assistantMsgId) return m;
+        const stageChoices = (m.stageChoices ?? []).map((c) =>
+          c.checkpointId === checkpointId
+            ? { ...c, selected: choiceId, retryable: false }
+            : c
+        );
+        return {
+          ...m,
+          stageChoices,
+          awaitingChoice: false,
+          streamStatusText: `> 已选择 ${choiceId}，继续生成…`,
+          activePartialStep: next ?? undefined,
+        };
+      })
+    );
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    try {
+      const { paused } = await consumeChatStream(
+        assistantMsgId,
+        {
+          text: sourceUserText.slice(0, 12000),
+          mode: "spec",
+          action: "continue",
+          checkpoint_id: checkpointId,
+          choice: choiceId,
+        },
+        controller
+      );
+      if (paused) return;
+    } catch (e: unknown) {
+      if (!(e instanceof DOMException && e.name === "AbortError")) {
+        const rawMsg = e instanceof Error ? e.message : "续跑失败";
+        const hint = formatNetworkError(rawMsg);
+        setError(hint);
+        markChoiceRetry(assistantMsgId, checkpointId, choiceId);
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantMsgId ? { ...m, content: `❌ ${hint}` } : m
@@ -306,15 +585,59 @@ export default function Home() {
     } finally {
       setStreamingId(null);
       setLoading(false);
-      setPipelineStep(null);
+      setContinuingChoice(false);
+      setChoiceLoadingId(null);
+      setStreamStatusText("");
       abortRef.current = null;
     }
+  }
+
+  async function onStageChoice(choiceId: ChoiceId, checkpointId: string) {
+    if (loading || continuingChoice) return;
+
+    const assistantMsg = [...messages]
+      .reverse()
+      .find(
+        (m) =>
+          m.role === "assistant" &&
+          m.stageChoices?.some((c) => c.checkpointId === checkpointId && !c.selected)
+      );
+    if (!assistantMsg?.sourceUserText) return;
+
+    const choiceMeta = assistantMsg.stageChoices?.find((c) => c.checkpointId === checkpointId);
+    await runContinue(
+      assistantMsg.id,
+      assistantMsg.sourceUserText,
+      checkpointId,
+      choiceId,
+      choiceMeta?.step ?? "discovery"
+    );
+  }
+
+  async function onStageRetry(checkpointId: string, choiceId: ChoiceId) {
+    if (loading || continuingChoice) return;
+    const assistantMsg = [...messages]
+      .reverse()
+      .find((m) =>
+        m.stageChoices?.some((c) => c.checkpointId === checkpointId && c.retryable)
+      );
+    if (!assistantMsg?.sourceUserText) return;
+    const choiceMeta = assistantMsg.stageChoices?.find((c) => c.checkpointId === checkpointId);
+    await runContinue(
+      assistantMsg.id,
+      assistantMsg.sourceUserText,
+      checkpointId,
+      choiceId,
+      choiceMeta?.step ?? "discovery"
+    );
   }
 
   function onStop() {
     abortRef.current?.abort();
     abortRef.current = null;
     setLoading(false);
+    setContinuingChoice(false);
+    setChoiceLoadingId(null);
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -487,7 +810,12 @@ export default function Home() {
             <WelcomeHero mode={mode} stackOk={stackOk} onPromptClick={onPromptClick} />
           ) : (
             <div className="mx-auto flex max-w-4xl flex-col gap-5 px-4 py-8">
-              <PipelineProgress activeStep={pipelineStep} visible={loading} />
+              <PipelineProgress
+                activeStep={pipelineStep}
+                visible={loading || continuingChoice}
+                elapsedSec={elapsed}
+                statusText={streamStatusText}
+              />
               {messages.map((msg) =>
                 msg.role === "user" ? (
                   <UserBubble key={msg.id} msg={msg} />
@@ -499,6 +827,10 @@ export default function Home() {
                     elapsed={elapsed}
                     stageLabel={pipelineStepLabel(pipelineStep, mode)}
                     mode={mode}
+                    onStageChoice={(id, checkpointId) => void onStageChoice(id, checkpointId)}
+                    onStageRetry={(cp, c) => void onStageRetry(cp, c)}
+                    choiceDisabled={loading || continuingChoice}
+                    choiceLoadingId={choiceLoadingId}
                   />
                 )
               )}

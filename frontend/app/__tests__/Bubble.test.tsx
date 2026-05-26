@@ -32,12 +32,27 @@ describe("AssistantBubble", () => {
     expect(screen.getByText(/10s/)).toBeInTheDocument();
   });
 
-  it("shows thinking hint when streaming > 30s", () => {
+  it("shows streaming status bar when streaming with stage partials", () => {
+    const partialMsg: Message = {
+      ...msg,
+      content: "",
+      streamStatusText: "> 设计架构与 Sprint 待办…",
+      stagePartials: [{ step: "discovery", markdown: "### 需求分析\n\n**目标:** test" }],
+    };
+    render(
+      <AssistantBubble msg={partialMsg} isStreaming={true} elapsed={5} stageLabel="架构设计" />
+    );
+    expect(screen.getByRole("status")).toBeInTheDocument();
+    expect(screen.getByText(/设计架构/)).toBeInTheDocument();
+    expect(screen.getByText(/5s/)).toBeInTheDocument();
+  });
+
+  it("shows long wait hint when streaming > 30s", () => {
     const emptyMsg = { ...msg, content: "" };
     render(
       <AssistantBubble msg={emptyMsg} isStreaming={true} elapsed={35} />
     );
-    expect(screen.getByText(/思考模式耗时较长/)).toBeInTheDocument();
+    expect(screen.getByText(/模型单步约 1~3 分钟/)).toBeInTheDocument();
   });
 
   it("renders artifact action buttons when artifact exists and not streaming", () => {

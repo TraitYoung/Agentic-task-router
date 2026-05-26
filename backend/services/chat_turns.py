@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -14,8 +15,21 @@ from services.pipeline_memory import save_pipeline_memory
 from services.retrieval_context import build_retrieval_context
 
 Mode = Literal["spec", "review"]
+StreamAction = Literal["start", "continue"]
+ChoiceId = Literal["A", "B", "C", "D"]
 
 logger = logging.getLogger("specforge.chat_turns")
+
+_HEARTBEAT_INTERVAL_SEC = 8.0
+
+
+def _event_step_hint(event: dict[str, Any]) -> str:
+    etype = event.get("type")
+    if etype == "ack":
+        return str(event.get("next_step") or "")
+    if etype in ("status", "partial", "choice"):
+        return str(event.get("step") or "")
+    return ""
 
 
 @dataclass(frozen=True)
@@ -40,6 +54,7 @@ class ChatTurnRunner:
         run_review: Callable[..., Any],
         run_spec_stream: Callable[..., Any],
         run_review_stream: Callable[..., Any],
+        run_spec_interactive_stream: Callable[..., Any] | None = None,
     ) -> None:
         self._store_factory = store_factory
         self._session_cache = session_cache
@@ -48,6 +63,7 @@ class ChatTurnRunner:
         self._run_review = run_review
         self._run_spec_stream = run_spec_stream
         self._run_review_stream = run_review_stream
+        self._run_spec_interactive_stream = run_spec_interactive_stream
 
     def _step_id(self, mode: Mode) -> str:
         return "reverse_engineer" if mode == "review" else "discovery"
@@ -86,11 +102,23 @@ class ChatTurnRunner:
             artifact_filename=pipeline.artifact_filename,
         )
 
-    async def execute_stream(self, mode: Mode, text: str, session_id: str):
+    async def execute_stream(
+        self,
+        mode: Mode,
+        text: str,
+        session_id: str,
+        *,
+        action: StreamAction = "start",
+        checkpoint_id: str | None = None,
+        choice: ChoiceId | None = None,
+    ):
         store = self._store_factory()
-        retrieval_context = build_retrieval_context(store, mode=mode, text=text)
+        retrieval_context = (
+            "" if action == "continue" else build_retrieval_context(store, mode=mode, text=text)
+        )
         event_queue: asyncio.Queue = asyncio.Queue(maxsize=256)
         loop = asyncio.get_running_loop()
+        use_interactive = mode == "spec" and self._run_spec_interactive_stream is not None
 
         def _run_sync():
             llm = self._resolve_llm(self._step_id(mode), None)
@@ -98,17 +126,51 @@ class ChatTurnRunner:
                 return self._run_review_stream(
                     text, llm, retrieval_context=retrieval_context, event_queue=event_queue
                 )
+            if use_interactive:
+                return self._run_spec_interactive_stream(
+                    text,
+                    llm,
+                    retrieval_context=retrieval_context,
+                    event_queue=event_queue,
+                    session_id=session_id,
+                    session_cache=self._session_cache,
+                    action=action,
+                    checkpoint_id=checkpoint_id,
+                    choice=choice,
+                )
             return self._run_spec_stream(
                 text, llm, retrieval_context=retrieval_context, event_queue=event_queue
             )
 
         future = loop.run_in_executor(None, _run_sync)
 
+        last_activity = time.monotonic()
+        last_heartbeat = 0.0
+        last_step = ""
+
         while True:
             try:
                 event = await asyncio.wait_for(event_queue.get(), timeout=0.1)
+                last_activity = time.monotonic()
+                step_hint = _event_step_hint(event)
+                if step_hint:
+                    last_step = step_hint
                 yield event
             except asyncio.TimeoutError:
+                now = time.monotonic()
+                if (
+                    not future.done()
+                    and now - last_activity >= _HEARTBEAT_INTERVAL_SEC
+                    and now - last_heartbeat >= _HEARTBEAT_INTERVAL_SEC
+                ):
+                    last_heartbeat = now
+                    payload: dict[str, Any] = {
+                        "type": "heartbeat",
+                        "text": "模型仍在思考，请稍候…",
+                    }
+                    if last_step:
+                        payload["step"] = last_step
+                    yield payload
                 if future.done():
                     while not event_queue.empty():
                         try:
@@ -117,7 +179,54 @@ class ChatTurnRunner:
                             break
                     break
 
-        pipeline = future.result()
+        try:
+            outcome = future.result()
+        except Exception as exc:
+            logger.exception("pipeline executor failed: session_id=%s action=%s", session_id, action)
+            yield {"type": "error", "detail": f"turn failed: {exc}", "step": ""}
+            return
+
+        if use_interactive:
+            if outcome.status == "paused":
+                return
+
+            pipeline = outcome.result
+            if pipeline is None:
+                return
+
+            trace_raw = pipeline.steps
+            save_pipeline_memory(store, mode=mode, trace_raw=trace_raw, user_text=text)
+            self._append_turn(session_id=session_id, user_text=text, assistant_text=pipeline.summary)
+
+            trace_payload = [TraceStep.model_validate(step).model_dump() for step in trace_raw]
+            intent = TaskIntent(
+                task_type="dev_pipeline",
+                urgency_level=2,
+                pain_level=1,
+                raw_input=text.strip()[:200] or ".",
+                quadrant="Q4",
+            )
+
+            yield {
+                "type": "artifact",
+                "format": "markdown",
+                "filename": pipeline.artifact_filename,
+                "file_path": pipeline.artifact_path,
+                "content": pipeline.artifact_md,
+            }
+            yield {"type": "reply", "content": pipeline.summary}
+            yield {
+                "type": "meta",
+                "session_id": session_id,
+                "intent": intent.model_dump(),
+                "trace_id": "",
+                "trace": trace_payload,
+                "mode": mode,
+            }
+            yield {"type": "done"}
+            return
+
+        pipeline = outcome
         trace_raw = pipeline.steps
         save_pipeline_memory(store, mode=mode, trace_raw=trace_raw, user_text=text)
         self._append_turn(session_id=session_id, user_text=text, assistant_text=pipeline.summary)

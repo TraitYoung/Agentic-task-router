@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Dict
+from typing import Any, Dict
 
 from langchain_openai import ChatOpenAI
 
@@ -31,20 +31,27 @@ def resolve_step_llm(step_id: str, fallback_llm, *, structured: bool = False):
         return fallback_llm
 
     max_tokens = settings.step_max_tokens(step_id)
-    model_kwargs = settings.structured_model_kwargs() if structured else settings.model_kwargs()
-    kwargs_key = json.dumps(model_kwargs, sort_keys=True, default=str)
-    cache_key = f"{model}|{base_url}|{step_id}|{max_tokens}|{structured}|{settings.llm_request_timeout}|{kwargs_key}"
+    api_kwargs = dict(settings.structured_model_kwargs() if structured else settings.model_kwargs())
+    reasoning_effort = api_kwargs.pop("reasoning_effort", None)
+    kwargs_key = json.dumps(api_kwargs, sort_keys=True, default=str)
+    cache_key = (
+        f"{model}|{base_url}|{step_id}|{max_tokens}|{structured}|"
+        f"{settings.llm_request_timeout}|{reasoning_effort}|{kwargs_key}"
+    )
     if cache_key in _CACHE:
         return _CACHE[cache_key]
 
-    inst = ChatOpenAI(
-        model=model,
-        api_key=api_key,
-        base_url=base_url,
-        timeout=settings.llm_request_timeout,
-        max_retries=2,
-        max_tokens=max_tokens,
-        model_kwargs=model_kwargs,
-    )
+    llm_kwargs: dict[str, Any] = {
+        "model": model,
+        "api_key": api_key,
+        "base_url": base_url,
+        "timeout": settings.llm_request_timeout,
+        "max_retries": 2,
+        "max_tokens": max_tokens,
+        "model_kwargs": api_kwargs,
+    }
+    if reasoning_effort:
+        llm_kwargs["reasoning_effort"] = reasoning_effort
+    inst = ChatOpenAI(**llm_kwargs)
     _CACHE[cache_key] = inst
     return inst

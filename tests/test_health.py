@@ -23,8 +23,9 @@ def test_health_reports_operational_fields_when_redis_is_down(monkeypatch):
     assert body["sqlite"]["ok"] is True
     assert body["memory_mb"] >= 0
     assert isinstance(body["env"]["has_llm_key"], bool)
-    assert body["env"]["llm_model"] == "kimi-k2.6"
-    assert body["env"]["llm_base_url"] == "https://api.moonshot.cn/v1"
-    assert body["env"]["llm_provider"] == "moonshot"
-    assert body["env"]["llm_thinking"] == "default"
+    assert body["env"]["llm_model"] == "deepseek-v4-pro"
+    assert body["env"]["llm_base_url"] == "https://api.deepseek.com/v1"
+    assert body["env"]["llm_provider"] == "deepseek"
+    assert body["env"]["llm_thinking"] == "enabled"
+    assert body["env"]["llm_reasoning_effort"] == "max"
     assert "has_qwen_key" not in body["env"]

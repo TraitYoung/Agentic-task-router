@@ -5,13 +5,20 @@ import { PIPELINE_STEPS, pipelineStepIndex, type PipelineStepId } from "./pipeli
 export function PipelineProgress({
   activeStep,
   visible,
+  elapsedSec = 0,
+  statusText,
 }: {
   activeStep: PipelineStepId | null;
   visible: boolean;
+  elapsedSec?: number;
+  statusText?: string;
 }) {
   if (!visible) return null;
 
   const activeIdx = pipelineStepIndex(activeStep);
+  const sublabel =
+    statusText?.replace(/^>\s*/, "") ||
+    (activeStep ? undefined : "等待模型响应…");
 
   return (
     <div className="mb-3 rounded-xl border border-[color:var(--line)] bg-white/60 px-3 py-3">
@@ -55,17 +62,19 @@ export function PipelineProgress({
           );
         })}
       </ol>
-      <MotionlessBar />
+      {(sublabel || elapsedSec > 0) && (
+        <p className="mt-2 text-[11px] text-zinc-500">
+          {sublabel}
+          {elapsedSec > 2 ? ` · ${elapsedSec}s` : ""}
+        </p>
+      )}
+      <div
+        className={`progress-shimmer mt-2 h-1 w-full overflow-hidden rounded-full ${
+          activeIdx >= 0 ? "bg-zinc-200/80" : "bg-zinc-100"
+        }`}
+        role="progressbar"
+        aria-label="生成进度"
+      />
     </div>
-  );
-}
-
-function MotionlessBar() {
-  return (
-    <div
-      className="progress-shimmer mt-3 h-1 w-full overflow-hidden rounded-full bg-zinc-200/80"
-      role="progressbar"
-      aria-label="生成进度"
-    />
   );
 }

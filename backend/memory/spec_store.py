@@ -14,8 +14,11 @@
 from __future__ import annotations
 
 import atexit
+import hashlib
 import json
 import logging
+import math
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,6 +37,25 @@ def _now_iso() -> str:
 
 def _like_query(query: str) -> str:
     return query.strip().strip(' \t\r\n?？!！,，.。;；:："“”\'‘’`()（）[]【】{}<>《》')
+
+
+def _text_embedding(text: str, dims: int = 64) -> list[float]:
+    """Local hashing embedding for lightweight vectorized retrieval."""
+    vec = [0.0] * dims
+    tokens = re.findall(r"[\w\u4e00-\u9fff]+", text.lower())
+    for token in tokens:
+        digest = hashlib.sha256(token.encode("utf-8")).digest()
+        idx = int.from_bytes(digest[:4], "big") % dims
+        sign = 1.0 if digest[4] % 2 == 0 else -1.0
+        vec[idx] += sign
+    norm = math.sqrt(sum(x * x for x in vec)) or 1.0
+    return [round(x / norm, 6) for x in vec]
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    return sum(x * y for x, y in zip(a, b))
 
 
 class SpecStore:
@@ -91,6 +113,8 @@ class SpecStore:
             CREATE TABLE IF NOT EXISTS knowledge (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title TEXT NOT NULL DEFAULT '',
+                source TEXT NOT NULL DEFAULT '',
+                content_hash TEXT NOT NULL DEFAULT '',
                 content TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
@@ -101,10 +125,27 @@ class SpecStore:
                 INSERT INTO knowledge_fts(rowid, title, content)
                 VALUES (new.id, new.title, new.content);
             END;
+
+            CREATE TABLE IF NOT EXISTS knowledge_vectors (
+                knowledge_id INTEGER PRIMARY KEY,
+                embedding TEXT NOT NULL,
+                FOREIGN KEY (knowledge_id) REFERENCES knowledge(id) ON DELETE CASCADE
+            );
             """
         )
+        self._ensure_knowledge_columns()
         self._conn.commit()
         self._stamp_alembic_if_needed()
+
+    def _ensure_knowledge_columns(self) -> None:
+        columns = {
+            row["name"]
+            for row in self._conn.execute("PRAGMA table_info(knowledge)").fetchall()
+        }
+        if "source" not in columns:
+            self._conn.execute("ALTER TABLE knowledge ADD COLUMN source TEXT NOT NULL DEFAULT ''")
+        if "content_hash" not in columns:
+            self._conn.execute("ALTER TABLE knowledge ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''")
 
     @staticmethod
     def _alembic_stamp_revision() -> str:
@@ -317,15 +358,53 @@ class SpecStore:
 
     # ── 知识库存取 ──────────────────────────────────────
 
-    def save_knowledge(self, *, title: str, content: str) -> int:
+    def save_knowledge(self, *, title: str, content: str, source: str = "") -> int:
         """保存一条知识文档，返回 row id。"""
+        content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        existing = self._conn.execute(
+            "SELECT id FROM knowledge WHERE content_hash = ? AND source = ?",
+            (content_hash, source),
+        ).fetchone()
+        if existing:
+            return int(existing["id"])
+
         cur = self._conn.execute(
-            "INSERT INTO knowledge (title, content, created_at) VALUES (?, ?, ?)",
-            (title, content, _now_iso()),
+            "INSERT INTO knowledge (title, source, content_hash, content, created_at) VALUES (?, ?, ?, ?, ?)",
+            (title, source, content_hash, content, _now_iso()),
+        )
+        knowledge_id = int(cur.lastrowid)
+        self._conn.execute(
+            "INSERT OR REPLACE INTO knowledge_vectors (knowledge_id, embedding) VALUES (?, ?)",
+            (knowledge_id, json.dumps(_text_embedding(f"{title}\n{content}"))),
         )
         self._conn.commit()
         logger.info("knowledge saved: title=%s len=%d", title[:80], len(content))
-        return cur.lastrowid
+        return knowledge_id
+
+    def search_knowledge_vector(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
+        """Search knowledge by local hashed vector similarity."""
+        if not query.strip():
+            return []
+        query_vec = _text_embedding(query)
+        rows = self._conn.execute(
+            """SELECT k.title, k.source, k.content, k.created_at, v.embedding
+               FROM knowledge_vectors v
+               JOIN knowledge k ON k.id = v.knowledge_id"""
+        ).fetchall()
+        scored: list[tuple[float, dict[str, Any]]] = []
+        for row in rows:
+            try:
+                emb = json.loads(row["embedding"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            score = _cosine_similarity(query_vec, [float(x) for x in emb])
+            if score > 0:
+                item = dict(row)
+                item.pop("embedding", None)
+                item["score"] = round(score, 4)
+                scored.append((score, item))
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return [item for _, item in scored[:limit]]
 
     def search_knowledge(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
         """FTS5 检索知识库，中文回退 LIKE。返回 title + content 摘要。"""
@@ -334,7 +413,7 @@ class SpecStore:
         q = query.strip().replace('"', '')
         try:
             rows = self._conn.execute(
-                """SELECT k.title, k.content, k.created_at
+                """SELECT k.title, k.source, k.content, k.created_at
                    FROM knowledge_fts f
                    JOIN knowledge k ON k.id = f.rowid
                    WHERE knowledge_fts MATCH ?
@@ -349,7 +428,7 @@ class SpecStore:
         if not rows:
             like_q = f"%{_like_query(q) or q}%"
             rows = self._conn.execute(
-                """SELECT title, content, created_at
+                """SELECT title, source, content, created_at
                    FROM knowledge
                    WHERE title LIKE ? OR content LIKE ?
                    ORDER BY created_at DESC
@@ -357,7 +436,16 @@ class SpecStore:
                 (like_q, like_q, limit),
             ).fetchall()
 
-        return [dict(r) for r in rows]
+        results = [dict(r) for r in rows]
+        seen = {(item.get("title", ""), item.get("source", "")) for item in results}
+        for item in self.search_knowledge_vector(query, limit=limit):
+            key = (item.get("title", ""), item.get("source", ""))
+            if key not in seen:
+                results.append(item)
+                seen.add(key)
+            if len(results) >= limit:
+                break
+        return results
 
     def close(self) -> None:
         try:

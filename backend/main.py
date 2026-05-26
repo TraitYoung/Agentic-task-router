@@ -22,6 +22,7 @@ from config.step_model_routing import resolve_step_llm
 from middleware import RateLimitMiddleware, RequestLogMiddleware
 from agents.dev_pipeline.orchestrator import (
     run_dev_pipeline,
+    run_dev_pipeline_interactive_stream,
     run_dev_pipeline_stream,
     run_reverse_engineer,
     run_reverse_engineer_stream,
@@ -206,8 +207,7 @@ def _turn_error_payload(exc: Exception) -> dict[str, str]:
 
 class ChatRequest(BaseModel):
     text: str = Field(
-        ...,
-        min_length=1,
+        default="",
         max_length=12000,
         description="用户输入（想法描述或待审查的代码）",
         examples=["做一个 React Todo 应用，支持增删改"],
@@ -216,6 +216,18 @@ class ChatRequest(BaseModel):
         default="spec",
         description="spec=想法→工程规格（正向）；review=粘贴代码→审查报告（逆向）",
         examples=["spec"],
+    )
+    action: Literal["start", "continue"] = Field(
+        default="start",
+        description="start=新流水线；continue=从 checkpoint 续跑下一步",
+    )
+    checkpoint_id: str | None = Field(
+        default=None,
+        description="continue 时必填：上次 paused 返回的 checkpoint_id",
+    )
+    choice: Literal["A", "B", "C", "D"] | None = Field(
+        default=None,
+        description="continue 时必填：用户在上一阶段的 A/B/C/D 选择",
     )
 
 
@@ -277,6 +289,7 @@ chat_turn_runner = ChatTurnRunner(
     run_review=run_reverse_engineer,
     run_spec_stream=run_dev_pipeline_stream,
     run_review_stream=run_reverse_engineer_stream,
+    run_spec_interactive_stream=run_dev_pipeline_interactive_stream,
 )
 
 
@@ -285,6 +298,17 @@ def _build_turn_items(turns: list[dict]) -> list[ChatExportItem]:
         ChatExportItem(user=t.get("user", ""), assistant=t.get("assistant", ""), ts=t.get("ts", ""))
         for t in turns
     ]
+
+
+def _validate_chat_request(payload: ChatRequest) -> None:
+    if payload.action == "continue":
+        if not payload.checkpoint_id:
+            raise HTTPException(status_code=400, detail="continue requires checkpoint_id")
+        if not payload.choice:
+            raise HTTPException(status_code=400, detail="continue requires choice")
+        return
+    if not payload.text or not payload.text.strip():
+        raise HTTPException(status_code=400, detail="missing field: text")
 
 
 # ── Endpoints ──────────────────────────────────
@@ -311,6 +335,7 @@ async def chat_api(
     session_id = x_session_id or str(uuid4())
     trace_id = (x_trace_id or "").strip() or str(uuid4())
     response.headers["X-Trace-Id"] = trace_id
+    _validate_chat_request(payload)
 
     try:
         result = chat_turn_runner.execute(payload.mode, payload.text, session_id)
@@ -358,10 +383,18 @@ async def chat_stream_api(
 ):
     session_id = x_session_id or str(uuid4())
     trace_id = (x_trace_id or "").strip() or str(uuid4())
+    _validate_chat_request(payload)
 
     async def event_gen():
         try:
-            async for event in chat_turn_runner.execute_stream(payload.mode, payload.text, session_id):
+            async for event in chat_turn_runner.execute_stream(
+                payload.mode,
+                payload.text,
+                session_id,
+                action=payload.action,
+                checkpoint_id=payload.checkpoint_id,
+                choice=payload.choice,
+            ):
                 if event.get("type") == "meta":
                     event["trace_id"] = trace_id
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
@@ -381,7 +414,12 @@ async def chat_stream_api(
     return StreamingResponse(
         event_gen(),
         media_type="text/event-stream",
-        headers={"X-Trace-Id": trace_id},
+        headers={
+            "X-Trace-Id": trace_id,
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

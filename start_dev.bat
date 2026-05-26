@@ -43,7 +43,15 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM --- Wait for frontend port and open browser ---
+REM --- Wait for backend health, frontend port, then open browser ---
+echo [3/3] Waiting for backend health...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\wait_http.ps1" -Url "http://127.0.0.1:8000/api/v1/health" -Attempts 60 -SleepSec 1
+if errorlevel 1 (
+    echo [ERROR] Backend health check did not become ready
+    pause
+    exit /b 1
+)
+
 echo [3/3] Waiting for frontend (port 3000)...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\wait_listen.ps1" -Port 3000
 start http://127.0.0.1:3000

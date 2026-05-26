@@ -13,6 +13,7 @@ from schemas.workflows import (
     DevTaskSpec,
     DevTestBundle,
     DevTestsChangelog,
+    ENGINEERING_HANDOFF_CONTRACT,
     ReverseEngineerSpec,
     to_implementation_prompt,
     to_review_prompt,
@@ -141,6 +142,8 @@ def build_spec_artifact_md(
         "**Top backlog:**",
         _numbered_list(outline.backlog_mvp_ordered, limit=8),
         "",
+        ENGINEERING_HANDOFF_CONTRACT,
+        "",
         IMPLEMENTATION_PROMPT_HEADING,
         "",
         impl_prompt,
@@ -173,6 +176,84 @@ def build_spec_artifact_md(
         ]
     )
     return "\n".join(sections)
+
+
+def build_discovery_partial_md(spec: DevTaskSpec) -> str:
+    return "\n".join(
+        [
+            "### 需求分析 — 中间结果",
+            "",
+            f"**目标:** {spec.goal}",
+            "",
+            f"**MVP 增量:** {spec.mvp_sprint_goal or '—'}",
+            "",
+            "**用户故事（前 5 条）:**",
+            _numbered_list(spec.user_stories, limit=5),
+            "",
+            "**验收标准（前 5 条）:**",
+            _numbered_list(spec.acceptance_criteria, limit=5),
+        ]
+    )
+
+
+def build_sprint_partial_md(outline: DevOutline) -> str:
+    return "\n".join(
+        [
+            "### 架构设计 — 中间结果",
+            "",
+            "**模块划分:**",
+            _bullet_list(outline.modules, limit=8),
+            "",
+            "**MVP 待办（前 5 条）:**",
+            _numbered_list(outline.backlog_mvp_ordered, limit=5),
+            "",
+            "**风险（前 3 条）:**",
+            _bullet_list(outline.risks, limit=3),
+        ]
+    )
+
+
+def build_implementation_partial_md(sketch: DevCodeSketch) -> str:
+    lang = sketch.language or "text"
+    preview = clip_text(sketch.code.strip() or "（草案为空）", 800)
+    return "\n".join(
+        [
+            "### 实现草案 — 中间结果",
+            "",
+            f"**语言/栈:** {lang}",
+            "",
+            f"**说明:** {clip_text(sketch.notes.strip(), 400) or '—'}",
+            "",
+            f"```{lang}",
+            preview,
+            "```",
+        ]
+    )
+
+
+def build_delivery_partial_md(delivery: DevTestsChangelog) -> str:
+    return "\n".join(
+        [
+            "### 测试方案 — 中间结果",
+            "",
+            f"**测试用例（{len(delivery.test_cases)} 条，前 5 条）:**",
+            _numbered_list(delivery.test_cases, limit=5),
+            "",
+            "**DoD（前 5 条）:**",
+            _numbered_list(delivery.definition_of_done, limit=5),
+        ]
+    )
+
+
+def build_test_code_partial_md(bundle: DevTestBundle) -> str:
+    lines = ["### 测试代码 — 中间结果", ""]
+    if not bundle.files:
+        lines.append("（暂无测试文件草案）")
+        return "\n".join(lines)
+    lines.append(f"**共 {len(bundle.files)} 个测试文件:**")
+    for item in bundle.files[:2]:
+        lines.append(f"- `{item.path or 'tests/example.test.ts'}`")
+    return "\n".join(lines)
 
 
 def build_spec_chat_summary(
@@ -282,8 +363,17 @@ def build_review_chat_summary(*, spec: ReverseEngineerSpec, profile: Mapping[str
     )
 
 
-def extract_section(md: str, heading: str) -> str:
+def extract_section(md: str, heading: str, stop_headings: tuple[str, ...] | None = None) -> str:
     """从 artifact markdown 提取指定 ## 标题下的正文（到下一个同级标题为止）。"""
+    if stop_headings is not None:
+        start = re.search(rf"^{re.escape(heading)}\s*\n", md, re.MULTILINE)
+        if not start:
+            return ""
+        body = md[start.end() :]
+        stops = [idx for h in stop_headings if (idx := body.find(f"\n{h}")) >= 0]
+        if stops:
+            body = body[: min(stops)]
+        return body.strip()
     pattern = re.compile(
         rf"^{re.escape(heading)}\s*\n(.*?)(?=^## |\Z)",
         re.MULTILINE | re.DOTALL,
@@ -293,11 +383,15 @@ def extract_section(md: str, heading: str) -> str:
 
 
 def extract_implementation_prompt(artifact_md: str) -> str:
-    return extract_section(artifact_md, IMPLEMENTATION_PROMPT_HEADING)
+    return extract_section(artifact_md, IMPLEMENTATION_PROMPT_HEADING, ("## Starter Code",))
 
 
 def extract_test_prompt(artifact_md: str) -> str:
-    return extract_section(artifact_md, TEST_PROMPT_HEADING)
+    return extract_section(
+        artifact_md,
+        TEST_PROMPT_HEADING,
+        (GENERATED_TEST_FILES_HEADING, "## Release Notes"),
+    )
 
 
 def extract_generated_test_files(artifact_md: str) -> str:
@@ -305,4 +399,4 @@ def extract_generated_test_files(artifact_md: str) -> str:
 
 
 def extract_review_prompt(artifact_md: str) -> str:
-    return extract_section(artifact_md, REVIEW_PROMPT_HEADING)
+    return extract_section(artifact_md, REVIEW_PROMPT_HEADING, ())

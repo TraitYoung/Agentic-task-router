@@ -14,8 +14,9 @@ from typing import Any
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-DEFAULT_LLM_BASE_URL = "https://api.moonshot.cn/v1"
-DEFAULT_LLM_MODEL = "kimi-k2.6"
+DEFAULT_LLM_BASE_URL = "https://api.deepseek.com/v1"
+DEFAULT_LLM_MODEL = "deepseek-v4-pro"
+DEFAULT_LLM_REASONING_EFFORT = "max"
 DEFAULT_LLM_REQUEST_TIMEOUT = 300
 DEFAULT_LLM_MAX_TOKENS = 8192
 
@@ -54,6 +55,7 @@ class Settings(BaseSettings):
     llm_thinking: str = "default"
     llm_structured_thinking: str = ""
     llm_structured_mode: str = ""
+    llm_reasoning_effort: str = DEFAULT_LLM_REASONING_EFFORT
 
     llm_discovery_model: str = ""
     llm_sprint_model: str = ""
@@ -110,7 +112,9 @@ class Settings(BaseSettings):
         mode = self.llm_thinking.strip().lower()
         if mode in ("disabled", "off", "false", "0"):
             return "disabled"
-        return "default"
+        if mode in ("enabled", "on", "true", "1", "default"):
+            return "enabled"
+        return "enabled"
 
     def structured_thinking_mode(self) -> str | None:
         raw = self.llm_structured_thinking.strip().lower()
@@ -119,35 +123,48 @@ class Settings(BaseSettings):
         if raw in ("disabled", "off", "false", "0"):
             return "disabled"
         if raw in ("default", "on", "enabled", "true", "1"):
-            return "default"
+            return "enabled"
         return None
 
-    def model_kwargs(self) -> dict[str, Any]:
+    def reasoning_effort(self) -> str:
+        raw = self.llm_reasoning_effort.strip().lower()
+        if raw in ("max", "high"):
+            return raw
         if self.thinking_mode() == "disabled":
+            return ""
+        return DEFAULT_LLM_REASONING_EFFORT
+
+    def _thinking_api_kwargs(self, *, structured: bool = False) -> dict[str, Any]:
+        mode = self.structured_thinking_mode() if structured else None
+        if mode == "disabled" or (mode is None and self.thinking_mode() == "disabled"):
             return {"extra_body": {"thinking": {"type": "disabled"}}}
-        return {}
+        out: dict[str, Any] = {"extra_body": {"thinking": {"type": "enabled"}}}
+        effort = self.reasoning_effort()
+        if effort:
+            out["reasoning_effort"] = effort
+        return out
+
+    def model_kwargs(self) -> dict[str, Any]:
+        return self._thinking_api_kwargs(structured=False)
 
     def structured_model_kwargs(self) -> dict[str, Any]:
-        mode = self.structured_thinking_mode()
-        if mode is None:
-            return self.model_kwargs()
-        if mode == "disabled":
-            return {"extra_body": {"thinking": {"type": "disabled"}}}
-        return {}
+        return self._thinking_api_kwargs(structured=True)
 
     def uses_json_prompt_structured(self) -> bool:
         mode = self.llm_structured_mode.strip().lower()
         base = self.llm_base_url.lower()
-        if mode in ("native", "openai", "dashscope"):
+        if mode in ("native", "openai", "dashscope", "deepseek"):
             return False
         if mode in ("json_prompt", "prompt", "moonshot"):
             return True
-        if "dashscope" in base:
+        if "dashscope" in base or "deepseek" in base:
             return False
         return "moonshot" in base
 
     def provider_label(self) -> str:
         base = self.llm_base_url.lower()
+        if "deepseek" in base:
+            return "deepseek"
         if "moonshot" in base:
             return "moonshot"
         if "dashscope" in base:
@@ -162,6 +179,7 @@ class Settings(BaseSettings):
             "llm_provider": self.provider_label(),
             "llm_thinking": self.thinking_mode(),
             "llm_structured_thinking": self.structured_thinking_mode() or self.thinking_mode(),
+            "llm_reasoning_effort": self.reasoning_effort() or None,
             "llm_request_timeout": self.llm_request_timeout,
         }
 

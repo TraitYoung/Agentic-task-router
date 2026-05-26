@@ -10,19 +10,37 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
-  let payload: { text?: string; mode?: string } = {};
+  let payload: {
+    text?: string;
+    mode?: string;
+    action?: string;
+    checkpoint_id?: string;
+    choice?: string;
+  } = {};
   try {
     payload = await req.json();
   } catch {
     return NextResponse.json({ detail: "invalid json body" }, { status: 400 });
   }
 
-  if (!payload?.text || typeof payload.text !== "string") {
+  const action = payload.action ?? "start";
+  if (action === "continue") {
+    if (!payload.checkpoint_id || !payload.choice) {
+      return NextResponse.json(
+        { detail: "continue requires checkpoint_id and choice" },
+        { status: 400 }
+      );
+    }
+  } else if (!payload?.text || typeof payload.text !== "string") {
     return NextResponse.json({ detail: "missing field: text" }, { status: 400 });
   }
 
-  const backendBody: Record<string, string> = { text: payload.text };
+  const backendBody: Record<string, string> = {};
+  if (payload.text) backendBody.text = payload.text;
   if (payload.mode) backendBody.mode = payload.mode;
+  backendBody.action = action;
+  if (payload.checkpoint_id) backendBody.checkpoint_id = payload.checkpoint_id;
+  if (payload.choice) backendBody.choice = payload.choice;
 
   const headers = forwardedBackendHeaders(req, { includeTrace: true });
   if (headers instanceof NextResponse) return headers;
@@ -53,6 +71,7 @@ export async function POST(req: NextRequest) {
     "Content-Type": "text/event-stream; charset=utf-8",
     "Cache-Control": "no-cache, no-transform",
     Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
   };
   const backendTrace = backendRes.headers.get("x-trace-id");
   if (backendTrace) outHeaders["x-trace-id"] = backendTrace;

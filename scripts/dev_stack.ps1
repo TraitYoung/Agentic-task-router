@@ -83,6 +83,35 @@ function Test-LocalListenPort([int]$Port) {
     return $false
 }
 
+function Wait-HttpReady([string]$Url, [int]$Attempts = 60, [int]$SleepSec = 1, [int]$TimeoutSec = 2) {
+    for ($i = 0; $i -lt $Attempts; $i++) {
+        try {
+            $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec $TimeoutSec
+            if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 300) {
+                Write-Host "HTTP ready: $Url"
+                return $true
+            }
+            Write-Host "Waiting for HTTP $Url (status=$($response.StatusCode))"
+        } catch {
+            Write-Host ("Waiting for HTTP " + $Url + "... " + (($i + 1) * $SleepSec) + "s (max " + ($Attempts * $SleepSec) + "s)")
+        }
+        Start-Sleep -Seconds $SleepSec
+    }
+    return $false
+}
+
+function Wait-LocalListenPort([int]$Port, [int]$Attempts = 60, [int]$SleepSec = 1) {
+    for ($i = 0; $i -lt $Attempts; $i++) {
+        if (Test-LocalListenPort -Port $Port) {
+            Write-Host "Port $Port ready"
+            return $true
+        }
+        Write-Host ("Waiting for port " + $Port + "... " + (($i + 1) * $SleepSec) + "s (max " + ($Attempts * $SleepSec) + "s)")
+        Start-Sleep -Seconds $SleepSec
+    }
+    return $false
+}
+
 function Get-PortPids([int]$Port) {
     # Get-NetTCPConnection 在部分 Windows 环境下会非常慢导致“脚本未响应”；优先用 netstat 解析。
     $pids = [System.Collections.Generic.HashSet[int]]::new()
@@ -239,7 +268,12 @@ function Start-Targets {
         $targets = Resolve-Targets
         if ($targets -contains "frontend" -or $All) {
             try {
-                Start-Sleep -Milliseconds 500
+                $backendReady = Wait-HttpReady -Url "http://127.0.0.1:8000/api/v1/health"
+                $frontendReady = Wait-LocalListenPort -Port 3000
+                if (-not ($backendReady -and $frontendReady)) {
+                    Write-Warning "Browser was not opened because the dev stack did not become ready."
+                    return
+                }
                 Start-Process "http://127.0.0.1:3000"
                 Write-Host "Opened browser: http://127.0.0.1:3000"
             } catch {

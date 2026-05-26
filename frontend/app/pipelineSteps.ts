@@ -11,6 +11,7 @@ export type PipelineStepId =
   | "test_code"
   | "test_code_done"
   | "merge"
+  | "awaiting_choice"
   | "reverse"
   | "reverse_done";
 
@@ -74,9 +75,34 @@ export function pipelineStepLabel(step: PipelineStepId | null, mode: "spec" | "r
     implementation_done: "实现草案完成",
     delivery: "对照草案编写测试方案…",
     delivery_done: "测试方案完成",
-    test_code: "生成测试代码草稿…",
+    test_code: "生成测试代码草稿（约 1~2 分钟）…",
     test_code_done: "测试代码草稿完成",
     merge: "汇总发布说明…",
+    awaiting_choice: "等待你的方向选择…",
   };
   return (step && map[step]) || "生成中…";
+}
+
+const PARTIAL_STEP_LABEL: Record<string, string> = {
+  discovery: "需求分析",
+  sprint: "架构设计",
+  implementation: "实现草案",
+  delivery: "测试方案",
+  test_code: "测试代码",
+};
+
+const NEXT_AFTER: Record<string, PipelineStepId> = {
+  discovery: "sprint",
+  sprint: "implementation",
+  implementation: "delivery",
+  delivery: "test_code",
+  test_code: "merge",
+};
+
+export function getNextStepAfter(completedStep: string): PipelineStepId | null {
+  return NEXT_AFTER[completedStep] ?? null;
+}
+
+export function partialStepTitle(step: string): string {
+  return PARTIAL_STEP_LABEL[step] ?? step;
 }

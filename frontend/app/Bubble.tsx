@@ -3,6 +3,9 @@
 import { Fragment, useState } from "react";
 import type { Message, UiMode } from "./types";
 import { TracePanel } from "./TracePanel";
+import { StageChoicePanel } from "./StageChoicePanel";
+import { StreamingStatusBar } from "./StreamingStatusBar";
+import { StagePartialPanel } from "./StagePartialPanel";
 import { formatTs } from "./lib";
 import {
   downloadMarkdown,
@@ -19,10 +22,10 @@ function SummaryBody({ text }: { text: string }) {
       {lines.map((line, i) => {
         const trimmed = line.trim();
         if (!trimmed) return <div key={i} className="h-1" />;
-        if (trimmed.startsWith("## ")) {
+        if (trimmed.startsWith("## ") || trimmed.startsWith("### ")) {
           return (
             <h3 key={i} className="text-base font-semibold text-zinc-900 pt-1">
-              {trimmed.slice(3)}
+              {trimmed.replace(/^#+\s*/, "")}
             </h3>
           );
         }
@@ -65,18 +68,26 @@ export function AssistantBubble({
   elapsed,
   stageLabel,
   mode = "spec",
+  onStageChoice,
+  onStageRetry,
+  choiceDisabled,
+  choiceLoadingId,
 }: {
   msg: Message;
   isStreaming: boolean;
   elapsed: number;
   stageLabel?: string;
   mode?: UiMode;
+  onStageChoice?: (choiceId: "A" | "B" | "C" | "D", checkpointId: string) => void;
+  onStageRetry?: (checkpointId: string, choice: "A" | "B" | "C" | "D") => void;
+  choiceDisabled?: boolean;
+  choiceLoadingId?: string | null;
 }) {
   const [copied, setCopied] = useState<"prompt" | "test" | "testcode" | "full" | null>(null);
-  const isStatusOnly = msg.content.startsWith("> ") && isStreaming;
-  const showThinkingHint = isStreaming && elapsed > 30;
   const hasArtifact = Boolean(msg.artifactMd?.trim());
   const isReview = mode === "review";
+  const pendingChoice = msg.stageChoices?.find((c) => !c.selected && msg.awaitingChoice);
+  const statusLine = msg.streamStatusText || (msg.content.startsWith("> ") ? msg.content : "");
 
   async function copyText(label: "prompt" | "test" | "testcode" | "full", text: string) {
     if (!text) return;
@@ -104,29 +115,65 @@ export function AssistantBubble({
   return (
     <div className="group flex flex-col gap-1 max-w-[80%]">
       <div className="relative rounded-2xl rounded-tl-sm bg-zinc-100 px-4 py-3 text-sm text-zinc-900 leading-relaxed">
-        {isStreaming && !msg.content && !hasArtifact ? (
-          <span className="flex flex-col gap-2 text-zinc-400">
-            <span className="flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce [animation-delay:0ms]" />
-              <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce [animation-delay:150ms]" />
-              <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce [animation-delay:300ms]" />
-              <span className="ml-1 text-[11px]">
-                {stageLabel || "准备中"}
-                {elapsed > 2 ? ` · ${elapsed}s` : ""}
-              </span>
-            </span>
-            {showThinkingHint && (
-              <span className="text-[11px] text-amber-700/90">
-                思考模式耗时较长，请耐心等待…
-              </span>
-            )}
-          </span>
-        ) : isStatusOnly ? (
-          <p className="text-shimmer text-[13px] text-zinc-500">{msg.content}</p>
-        ) : msg.content && !msg.content.startsWith("> ") ? (
+        {msg.stagePartials?.map((partial) => (
+          <StagePartialPanel
+            key={partial.step}
+            partial={partial}
+            isActive={msg.activePartialStep === partial.step}
+            defaultCollapsed={msg.activePartialStep !== partial.step}
+          >
+            <SummaryBody text={partial.markdown} />
+          </StagePartialPanel>
+        ))}
+
+        {isStreaming ? (
+          <StreamingStatusBar
+            label={
+              stageLabel ||
+              (!msg.stagePartials?.length && !statusLine ? "准备中" : "生成中…")
+            }
+            statusText={statusLine}
+            elapsed={elapsed}
+          />
+        ) : null}
+
+        {msg.stageChoices?.map((choice) =>
+          choice.selected || pendingChoice?.checkpointId === choice.checkpointId ? (
+            <StageChoicePanel
+              key={choice.checkpointId}
+              choice={choice}
+              disabled={choiceDisabled || Boolean(choice.selected && !choice.retryable)}
+              loading={choiceLoadingId === choice.checkpointId}
+              onSelect={(id, checkpointId) => onStageChoice?.(id, checkpointId)}
+              onRetry={(cp, c) => onStageRetry?.(cp, c)}
+            />
+          ) : null
+        )}
+
+        {msg.testCodeStream ? (
+          <div className="mt-3 border-t border-zinc-200/80 pt-3">
+            <p className="mb-2 text-[12px] font-medium text-zinc-600">测试代码生成中…</p>
+            <pre className="whitespace-pre-wrap text-[12px] leading-relaxed text-zinc-800 font-sans">
+              {msg.testCodeStream}
+            </pre>
+          </div>
+        ) : null}
+
+        {msg.mergeStream ? (
+          <div className="mt-3 border-t border-zinc-200/80 pt-3">
+            <p className="mb-2 text-[12px] font-medium text-zinc-600">发布说明生成中…</p>
+            <pre className="whitespace-pre-wrap text-[12px] leading-relaxed text-zinc-800 font-sans">
+              {msg.mergeStream}
+            </pre>
+          </div>
+        ) : null}
+
+        {msg.content && !msg.content.startsWith("> ") && !msg.stagePartials?.length && !msg.mergeStream && !msg.testCodeStream ? (
           <SummaryBody text={msg.content} />
-        ) : msg.content ? (
-          <p className="text-[13px] text-zinc-500">{msg.content}</p>
+        ) : msg.content && !msg.content.startsWith("> ") && (hasArtifact || !isStreaming) ? (
+          <div className="mt-3 border-t border-zinc-200/80 pt-3">
+            <SummaryBody text={msg.content} />
+          </div>
         ) : null}
 
         {hasArtifact && !isStreaming && (

@@ -24,7 +24,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the implementation map.
 [![Pydantic v2](https://img.shields.io/badge/Protocol-Pydantic_V2-red.svg)](https://docs.pydantic.dev/)
 [![Next.js 16](https://img.shields.io/badge/Frontend-Next.js_16-black.svg)](https://nextjs.org/)
 [![LangChain](https://img.shields.io/badge/LLM-LangChain-orange.svg)](https://www.langchain.com/)
-[![Kimi](https://img.shields.io/badge/Model-Kimi_K2.6-purple.svg)](https://platform.moonshot.cn/)
+[![DeepSeek](https://img.shields.io/badge/Model-DeepSeek_V4-purple.svg)](https://platform.deepseek.com/)
 [![Redis](https://img.shields.io/badge/Cache-Redis-red.svg)](https://redis.io/)
 [![TypeScript](https://img.shields.io/badge/Lang-TypeScript-3178c6.svg)](https://www.typescriptlang.org/)
 [![Tailwind CSS](https://img.shields.io/badge/CSS-Tailwind_v4-06b6d4.svg)](https://tailwindcss.com/)
@@ -38,7 +38,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the implementation map.
 
 ## 项目概述
 
-**技术栈：** Python、FastAPI、Next.js 16、LangChain、Qwen/Kimi、Pydantic v2、Redis、SQLite FTS5、SSE、TypeScript、Tailwind CSS v4
+**技术栈：** Python、FastAPI、Next.js 16、LangChain、DeepSeek V4、Pydantic v2、Redis、SQLite FTS5、SSE、TypeScript、Tailwind CSS v4
 
 **项目背景：** 针对 AI Coding 场景中"代码可生成但难以工程化"的问题，构建多 Agent 协同开发系统，实现从自然语言想法到结构化需求、开发计划、测试方案的闭环，同时支持逆向分析现有代码，发现架构风险与质量问题，提高工程可控性。
 
@@ -118,13 +118,16 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-`.env` 中至少配置（默认 **Moonshot Kimi 2.6**）：
+`.env` 中至少配置（默认 **DeepSeek V4 Flash**）：
 ```bash
-LLM_API_KEY=你的_Moonshot_API_Key
-LLM_BASE_URL=https://api.moonshot.cn/v1
-LLM_MODEL=kimi-k2.6
+LLM_API_KEY=你的_DeepSeek_API_Key
+LLM_BASE_URL=https://api.deepseek.com/v1
+LLM_MODEL=deepseek-v4-pro
+LLM_STRUCTURED_MODE=native
+LLM_THINKING=enabled
+LLM_REASONING_EFFORT=max
 ```
-Key 在 [platform.moonshot.cn](https://platform.moonshot.cn/) 创建；海外 `LLM_BASE_URL` 用 `https://api.moonshot.ai/v1`。旧版 `QWEN_*` 仍兼容。
+Key 在 [platform.deepseek.com](https://platform.deepseek.com/) 创建。轻量流式步骤（`test_code` / `merge`）建议 `deepseek-v4-flash`，structured 步骤用 `deepseek-v4-pro`（均为 1M 上下文）。旧版 `QWEN_*` / Moonshot `LLM_*` 仍兼容。
 
 **2. 启动服务**
 
@@ -214,15 +217,16 @@ cd frontend && npm install && npm run dev
 Backend(Hugging Face Space Secrets):
 
 ```bash
-LLM_API_KEY=your_moonshot_api_key
-LLM_BASE_URL=https://api.moonshot.cn/v1
-LLM_MODEL=kimi-k2.6
-LLM_STRUCTURED_MODE=json_prompt
+LLM_API_KEY=your_deepseek_api_key
+LLM_BASE_URL=https://api.deepseek.com/v1
+LLM_MODEL=deepseek-v4-flash
+LLM_STRUCTURED_MODE=native
+LLM_THINKING=disabled
 LLM_REQUEST_TIMEOUT=300
 REDIS_URL=rediss://default:<password>@<host>:6379
 ```
 
-Kimi K2.6 默认开启思考模式，端到端生成可能需数分钟；可选 `LLM_THINKING=disabled` 提速。
+DeepSeek V4 结构化步骤建议 `LLM_STRUCTURED_MODE=native`；关闭 thinking 可显著提速。
 
 Frontend(Vercel):
 
@@ -254,12 +258,13 @@ docker compose logs -f frontend
 3. 在 Space **Settings → Repository secrets** 中设置：
    | Secret | 值 |
    |--------|-----|
-   | `LLM_API_KEY` | Moonshot 控制台 API Key |
-   | `LLM_BASE_URL` | `https://api.moonshot.cn/v1`（海外：`https://api.moonshot.ai/v1`） |
-   | `LLM_MODEL` | `kimi-k2.6` |
+   | `LLM_API_KEY` | DeepSeek 控制台 API Key |
+   | `LLM_BASE_URL` | `https://api.deepseek.com/v1` |
+   | `LLM_MODEL` | `deepseek-v4-flash`（或 `deepseek-v4-pro`） |
+   | `LLM_STRUCTURED_MODE` | `native` |
    | `REDIS_URL` | Upstash 等 Redis 连接串（可选） |
    旧 Secret 名 `QWEN_*` 仍可用，建议改名为 `LLM_*`。
-4. 保存后 **Restart Space**。访问 health 应看到 `env.has_llm_key: true`、`env.llm_model: "kimi-k2.6"`。
+4. 保存后 **Restart Space**。访问 health 应看到 `env.has_llm_key: true`、`env.llm_model: "deepseek-v4-flash"`。
 
 常用推送命令:
 
